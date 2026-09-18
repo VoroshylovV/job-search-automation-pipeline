@@ -24,13 +24,17 @@ def _get_or_create_metrics_sheet() -> str:
 def run_step3(
     step1_result: dict,
     step2_result: dict,
-    today: date | None = None,
+    utc_today: date | None = None,
 ) -> dict:
-    today = today or date.today()
+    from datetime import datetime, timezone
+
+    utc_today = utc_today or datetime.now(timezone.utc).date()
     vacancies = step1_result["vacancies"]
 
     metrics = RunMetrics(
-        run_date=today.isoformat(),
+        # UTC — узгоджено з логом дублів і результатом Кроку 4 (див.
+        # config.py, розділ "Часові пояси").
+        run_date=utc_today.isoformat(),
         total_found_before_filters=step1_result["total_found_before_filters"],
         shown_after_filters=len(vacancies),
         low_match_location_count=sum(1 for v in vacancies if v.low_match_location),

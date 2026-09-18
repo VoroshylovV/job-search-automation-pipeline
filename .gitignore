@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Секрети — README прямо каже додати це в .gitignore, а файлу не було
+credentials/
+.env
+
+# Локальні артефакти запуску
+reports/
+*.log

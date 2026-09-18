@@ -118,3 +118,66 @@ METRICS_HEADER = [
     "Статус happymonday.ua",
     "Примітки",
 ]
+
+
+@dataclass
+class SelfCheckResult:
+    """Крок 4 — самоперевірка запуску. Лише фіксує вже відомі факти цього
+    запуску (+ одне читання власної історії для евристики 4.3) — нічого не
+    перераховує заново на джерелах і не змінює файли Кроків 1-3."""
+
+    timestamp_utc: str  # "YYYY-MM-DD HH:MM UTC", той самий момент і для 4.4, і для 4.5
+    step1_status: str  # "OK" | "ЧАСТКОВО" | "НЕ ВИКОНАНО"
+    step1_note: str
+    step2_status: str
+    step2_note: str
+    step3_metrics_status: str
+    step3_metrics_note: str
+    step3_tracker_status: str
+    step3_tracker_note: str
+    sources_ok_count: int  # X/5
+    collection_method: str  # "усі_сторінки" | "перша_сторінка" | "оцінка" | "не_встановлено"
+    conversion_pct: str  # "NN" або "н/д" (якщо знайдено=0)
+    trend_comparable: bool
+    trend_comparable_reason: str
+    # "так"/"ні"/"н/д" — чи цей запуск при повному 5/5 покритті показав лише
+    # Low-match вакансії (або нуль). Зберігається в окремій колонці саме
+    # для того, щоб 4.3-евристику (3+ поспіль) можна було рахувати з
+    # ІСТОРІЇ файлу, а не лише для поточного запуску — колонок метрики
+    # (Крок 3) для цього не досить, там немає розподілу по Match-рівнях.
+    only_low_or_zero_at_full_coverage: str
+    low_match_streak_signal: bool
+    notes: str = ""
+
+    def as_row(self) -> list:
+        return [
+            self.timestamp_utc,
+            f"{self.step1_status}" + (f" — {self.step1_note}" if self.step1_note else ""),
+            f"{self.step2_status}" + (f" — {self.step2_note}" if self.step2_note else ""),
+            f"{self.step3_metrics_status}"
+            + (f" — {self.step3_metrics_note}" if self.step3_metrics_note else ""),
+            f"{self.step3_tracker_status}"
+            + (f" — {self.step3_tracker_note}" if self.step3_tracker_note else ""),
+            f"{self.sources_ok_count}/5",
+            self.collection_method,
+            self.conversion_pct,
+            ("так" if self.trend_comparable else "ні")
+            + (f" ({self.trend_comparable_reason})" if not self.trend_comparable and self.trend_comparable_reason else ""),
+            self.only_low_or_zero_at_full_coverage,
+            self.notes or "без зауважень",
+        ]
+
+
+SELFCHECK_HEADER = [
+    "Перевірка",
+    "Крок 1",
+    "Крок 2",
+    "Крок 3 (метрика)",
+    "Крок 3 (таблиця відгуків)",
+    "Джерела",
+    "Спосіб збору «знайдено»",
+    "Конверсія показано/знайдено",
+    "Порівнюваність тренду",
+    "Лише Low/нуль при 5/5",
+    "Примітки",
+]

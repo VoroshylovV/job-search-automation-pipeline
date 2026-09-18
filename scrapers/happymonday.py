@@ -12,6 +12,8 @@ from bs4 import BeautifulSoup
 from models import RawJobPosting
 from scrapers.base import ScraperError, fetch, get_session
 
+COLLECTION_METHOD = "перша_сторінка"  # див. коментар у scrapers/djinni.py
+
 BASE_URL = "https://happymonday.ua"
 LISTING_URLS = [
     f"{BASE_URL}/jobs-search/data-analyst",

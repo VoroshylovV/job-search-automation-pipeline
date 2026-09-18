@@ -13,11 +13,15 @@ from __future__ import annotations
 
 import logging
 import sys
-from datetime import date
+from datetime import datetime, timezone
+from zoneinfo import ZoneInfo
 
+from config import CANDIDATE_LOCAL_TZ
+from google_services import notify
 from pipeline.step1_vacancies import run_step1
 from pipeline.step2_mail import run_step2
 from pipeline.step3_metrics import run_step3
+from pipeline.step4_selfcheck import format_selfcheck_block, run_step4
 
 logging.basicConfig(
     level=logging.INFO,
@@ -26,7 +30,9 @@ logging.basicConfig(
 logger = logging.getLogger("main")
 
 
-def format_report(step1_result: dict, step2_result: dict, step3_result: dict) -> str:
+def format_report(
+    step1_result: dict, step2_result: dict, step3_result: dict, step4_result: dict
+) -> str:
     lines: list[str] = []
     vacancies = step1_result["vacancies"]
 
@@ -70,38 +76,73 @@ def format_report(step1_result: dict, step2_result: dict, step3_result: dict) ->
     else:
         lines.append(f"⚠️ Метрику не вдалося зберегти: {step3_result.get('error')}")
 
+    lines.append("\n## Крок 4 — самоперевірка запуску\n")
+    lines.append(format_selfcheck_block(step4_result["result"]))
+    if not step4_result.get("saved"):
+        lines.append(
+            f"\n⚠️ Результат перевірки виведено вище, але у файл «Результат щоденної "
+            f"перевірки» продубльовано не було: {step4_result.get('error')}"
+        )
+
     return "\n".join(lines)
 
 
 def main() -> int:
-    today = date.today()
-    logger.info("=== Запуск пайплайна: %s ===", today.isoformat())
+    # Два навмисно різні "сьогодні" — див. config.py, розділ "Часові пояси",
+    # і докладний коментар на початку pipeline/step1_vacancies.py.
+    utc_now = datetime.now(timezone.utc)
+    utc_today = utc_now.date()
+    local_today = datetime.now(ZoneInfo(CANDIDATE_LOCAL_TZ)).date()
+    # Один момент, зафіксований ОДИН раз і перевикористаний для Кроку 4
+    # (4.4 і 4.5) — аналог одноразового `date -u` в чат-версії промпту.
+    selfcheck_timestamp = utc_now.strftime("%Y-%m-%d %H:%M") + " UTC"
+
+    logger.info("=== Запуск пайплайна: %s (UTC) / %s (%s) ===", utc_today.isoformat(), local_today.isoformat(), CANDIDATE_LOCAL_TZ)
 
     try:
-        step1_result = run_step1(today=today)
+        step1_result = run_step1(utc_today=utc_today, local_today=local_today)
     except Exception:
         logger.exception("Крок 1 критично провалився")
         step1_result = {
             "vacancies": [],
             "total_found_before_filters": 0,
             "source_statuses": {},
+            "collection_methods": {},
             "dedup_log_updated": False,
             "dedup_log_note": "Крок 1 критично провалився, див. лог помилок.",
+            "dedup_level_used": 0,
         }
 
+    # Крок 2 виконується завжди, незалежно від результату Кроку 1 (те саме
+    # правило, що й у чат-версії промпту) — тому окремий try/except, а не
+    # залежність від успіху блоку вище.
     try:
         step2_result = run_step2()
     except Exception:
         logger.exception("Крок 2 критично провалився")
         step2_result = {"findings": [], "total_emails_found": 0, "hr_domain_emails": 0, "known_company_emails": 0}
 
-    step3_result = run_step3(step1_result, step2_result, today=today)
+    # Крок 3/4 + звіт у try/finally: push-повідомлення (нижче) має піти
+    # БЕЗУМОВНО, навіть якщо щось у Кроці 3/4/формуванні звіту несподівано
+    # впаде — той самий принцип "сповіщення завжди", що й у чат-версії.
+    try:
+        step3_result = run_step3(step1_result, step2_result, utc_today=utc_today)
+        step4_result = run_step4(
+            step1_result, step2_result, step3_result, timestamp_utc=selfcheck_timestamp
+        )
 
-    report = format_report(step1_result, step2_result, step3_result)
-    print(report)
+        report = format_report(step1_result, step2_result, step3_result, step4_result)
+        print(report)
 
-    with open(f"reports/report_{today.isoformat()}.md", "w", encoding="utf-8") as f:
-        f.write(report)
+        with open(f"reports/report_{utc_today.isoformat()}.md", "w", encoding="utf-8") as f:
+            f.write(report)
+    except Exception:
+        logger.exception("Крок 3/4 або формування звіту критично провалились")
+    finally:
+        # Наприкінці — push-повідомлення, БЕЗУМОВНО (навіть якщо щось вище
+        # провалилось): Володимир хоче знати, коли звіт готовий для
+        # перегляду, незалежно від того, чи є в ньому щось "цікаве".
+        notify.send_push()
 
     return 0
 

@@ -24,6 +24,12 @@ from bs4 import BeautifulSoup
 from models import RawJobPosting
 from scrapers.base import ScraperError, fetch, get_session
 
+# Крок 4 (4.2) — фіксує, ЯК фактично зібрана ця цифра: тут завжди
+# "перша_сторінка", бо скрапер бере лише статичні keyword-сторінки нижче,
+# без пагінації (гортання сторінок наразі не реалізоване жодним скрапером
+# пайплайна) — див. README, "Відомі обмеження".
+COLLECTION_METHOD = "перша_сторінка"
+
 BASE_URL = "https://djinni.co"
 # Статичні keyword-сторінки Djinni — стабільніші за пошук з query-параметрами
 # (перевірено: exp_level у query string не завжди застосовується без сесії
