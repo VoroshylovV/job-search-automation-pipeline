@@ -15,11 +15,16 @@ scheduled-задачі. Той самий "мозок" (Claude оцінює ва
 
 ```
 config.py                 — усі бізнес-правила (профіль, пороги, назви файлів, часові пояси)
-models.py                 — dataclasses: RawJobPosting, ScoredVacancy, EmailFinding, RunMetrics, SelfCheckResult
-scrapers/                 — по одному модулю на джерело (djinni, dou, robota, workua, happymonday)
+models.py                 — dataclasses: RawJobPosting, ScoredVacancy, RawFreelanceProject,
+                             ScoredFreelanceProject, EmailFinding, RunMetrics, FreelanceRunMetrics,
+                             SelfCheckResult
+scrapers/                 — по одному модулю на джерело:
+                               вакансії — djinni, dou, robota, workua, happymonday
+                               фріланс (Крок 1.2) — freelancehunt, telegram_channel
 google_services/          — auth.py, drive.py, docs.py, sheets.py, gmail.py, notify.py (push)
 claude_orchestrator/      — prompts.py (тексти), client.py (виклик Anthropic API)
-pipeline/                 — step1_vacancies.py, step2_mail.py, step3_metrics.py, step4_selfcheck.py
+pipeline/                 — step1_vacancies.py, step1_2_freelance.py, step2_mail.py,
+                             step3_metrics.py, step4_selfcheck.py
 main.py                   — точка входу, формує фінальний звіт (report_<дата>.md) і шле push
 ```
 
@@ -88,6 +93,42 @@ python main.py
 bool`) і місце виклику в `main.py` (в самому кінці, безумовно) лишаються
 ті самі.
 
+## Крок 1.2 — фріланс-проєкти
+
+Окремий, паралельний до Кроку 1 пошук невеликих фріланс-проєктів для
+напрацювання портфоліо (не вакансій за наймом) — виконується завжди,
+одразу після Кроку 1, незалежно від його результату (`main.py`).
+
+- **Джерела**: 2 категорії Freelancehunt (`config.FREELANCEHUNT_CATEGORIES`
+  — "BI и аналитика данных" і "Базы данных и SQL"; вільнотекстовий пошук
+  на Freelancehunt заблокований robots.txt, тому лише ці 2 категорії) і
+  публічний preview Telegram-каналу `config.TELEGRAM_FREELANCE_CHANNEL`
+  (`https://t.me/s/<канал>`).
+- **Релевантність — бінарна**, на відміну від Кроку 1: `is_relevant`
+  true/false, без градації High/Medium/Low (`claude_orchestrator/prompts.py::FREELANCE_EVAL_SYSTEM_PROMPT`)
+  — для невеликих проєктів немає сенсу в тонкому ранжируванні, вагоме
+  лише "чи є дотик до аналізу даних/SQL/BI".
+- **Рівень конкуренції** визначається з кількості ставок на Freelancehunt:
+  низька/середня/висока за порогами `FREELANCEHUNT_LOW_BIDS_MAX` (14) і
+  `FREELANCEHUNT_MEDIUM_BIDS_MAX` (40) — каліброване на пілотному запуску
+  22.09.2026, не наукове правило, за потреби скоригуй у `config.py`.
+- **Дедублікація** — окремий лог "Лог показаних фріланс-проєктів
+  (автопошук)", **10-денне** вікно (`FREELANCE_DEDUP_LOG_MAX_AGE_DAYS`,
+  коротше за 21 день Кроку 1 — фріланс-проєкти закриваються швидше). На
+  відміну від Кроку 1, **без другого рівня страховки** — таблиця
+  "Ворошилов заявки на фріланс" не годиться як фолбек (там немає
+  структурованої дати показу).
+- **Метрики** — окрема таблиця "Метрики автопошуку фріланс-проєктів"
+  (`FreelanceRunMetrics`), з тим самим сигналом "дні поспіль з 0" по
+  кожному джерелу окремо, поріг перегляду `FREELANCE_ZERO_STREAK_REVIEW_THRESHOLD`
+  (7 запусків).
+- **Самоперевірка** — окремий рядок "Крок 1.2 (фріланс)" у Кроці 4
+  (`pipeline/step4_selfcheck.py::_step1_2_status`), той самий принцип
+  OK/ЧАСТКОВО/НЕ ВИКОНАНО, лише для 2 джерел замість 5.
+- **Таблиця заявок "Ворошилов заявки на фріланс" пайплайн НІКОЛИ не
+  пише** — рішення подавати заявку чи ні залишається за Володимиром,
+  автоматичний скрипт лише показує знайдені проєкти в звіті.
+
 ## Якщо requests+BeautifulSoup не бачить вакансій (SPA-сайти)
 
 `scrapers/robota.py` уже має запасний варіант через вбудований JSON-стан
@@ -137,6 +178,13 @@ Iterator[RawJobPosting]` лишається той самий.
 - **Push-сповіщення наприкінці КОЖНОГО запуску, безумовно** (навіть якщо
   нових вакансій немає чи щось вище провалилось) — через ntfy.sh, див.
   `.env.example` (`PUSH_NTFY_TOPIC`) і розділ "Push-сповіщення" нижче.
+- **Крок 1.2 (фріланс) виконується завжди одразу після Кроку 1**,
+  незалежно від його результату — власний try/except у `main.py`, той
+  самий принцип, що й для Кроку 2. Дедублікація — окреме **10-денне**
+  вікно (`config.FREELANCE_DEDUP_LOG_MAX_AGE_DAYS`, коротше за 21 день
+  Кроку 1), і власний сигнал "дні поспіль з 0" на джерело, поріг
+  перегляду `config.FREELANCE_ZERO_STREAK_REVIEW_THRESHOLD` (7). Див.
+  розділ "Крок 1.2 — фріланс-проєкти" нижче.
 
 ## Відомі обмеження й що варто перевірити перед першим "бойовим" запуском
 
@@ -167,3 +215,15 @@ Iterator[RawJobPosting]` лишається той самий.
 6. **Push-сповіщення вимагає ручного налаштування** `PUSH_NTFY_TOPIC` у
    `.env` (див. розділ "Push-сповіщення" вище) — без нього крок мовчки
    пропускається (з попередженням у лог), запуск не падає.
+7. **CSS-селектори `scrapers/freelancehunt.py` і `scrapers/telegram_channel.py`
+   (Крок 1.2) — так само орієнтовні**, з тієї ж причини, що й у пункті 1:
+   перед продакшеном запусти кожен окремо (`python -m scrapers.freelancehunt`,
+   `python -m scrapers.telegram_channel`) і перевір результат. Публічний
+   preview Telegram-каналу (`t.me/s/<канал>`) додатково має обмежену
+   глибину прогортання назад — не гарантує повну історію каналу, лише
+   останні пости на сторінці.
+8. **Таблиця "Ворошилов заявки на фріланс" — так само manual-only**, як і
+   "Ворошилов відгуки на вакансії" (пункт 5): пайплайн лише показує
+   знайдені фріланс-проєкти в звіті, рішення подати заявку та фіксація
+   статусу (включно з кольоровим дропдауном у колонці "Рішення власника
+   проекту") — вручну або окремим запитом у чаті з Claude.

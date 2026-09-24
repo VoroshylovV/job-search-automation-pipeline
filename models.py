@@ -66,6 +66,105 @@ class SourceStatus:
     note: str = ""
 
 
+# --------------------------------------------------------------------------
+# Крок 1.2 — фріланс-проєкти (Freelancehunt + Telegram-канал)
+# --------------------------------------------------------------------------
+@dataclass
+class RawFreelanceProject:
+    """Сирий фріланс-проєкт/пост, ДО оцінки релевантності Claude.
+
+    На відміну від RawJobPosting (5 джерел, спільна структура), тут поля
+    трохи асиметричні між джерелами: bids_count і budget_raw мають сенс
+    лише для Freelancehunt (2 категорії), для Telegram-каналу вони завжди
+    порожні/None — див. коментар у config.py про обмеження джерела 3."""
+
+    source: str  # "freelancehunt.com" | "telegram"
+    title: str
+    url: str
+    category: str  # назва категорії Freelancehunt, або "Telegram" для джерела 3
+    posted_raw: str
+    bids_count: Optional[int] = None  # лише Freelancehunt
+    budget_raw: str = ""  # лише Freelancehunt ("не вказано" теж сюди)
+    description_snippet: str = ""
+
+
+@dataclass
+class ScoredFreelanceProject:
+    """Проєкт після оцінки Claude. На відміну від ScoredVacancy тут НЕМАЄ
+    градації Match-рівня (High/Medium/Low) — лише бінарна релевантність
+    (так/ні), як і в текстовій версії промпту: "без градації рівнів на
+    кшталт Match-рівня вакансій — тут просто так/ні, однаковий принцип
+    для всіх трьох джерел"."""
+
+    title: str
+    source: str
+    category: str
+    url: str
+    why_relevant: str  # 1 речення: який саме дотик до аналізу даних/SQL/BI
+    posted_date: Optional[str]
+    bids_count: Optional[int] = None
+    competition_level: Optional[str] = None  # "низька"|"середня"|"висока", лише Freelancehunt
+    budget_raw: str = ""
+
+    def dedup_key(self) -> str:
+        return self.url
+
+
+@dataclass
+class FreelanceRunMetrics:
+    """Одна колонка на кожне з трьох джерел ("дні поспіль з 0") — щоб
+    сигнал "джерело малоактивне 7+ днів поспіль" (config.py) можна було
+    рахувати з історії файлу, так само як евристика Кроку 4 для вакансій."""
+
+    run_date: str
+    shown_bi: int = 0
+    shown_sql: int = 0
+    shown_total: int = 0
+    rejected_irrelevant: int = 0
+    status_bi: str = "OK"
+    status_sql: str = "OK"
+    streak_zero_bi: int = 0
+    streak_zero_sql: int = 0
+    notes: str = ""
+    shown_telegram: int = 0
+    status_telegram: str = "OK"
+    streak_zero_telegram: int = 0
+
+    def as_row(self) -> list:
+        return [
+            self.run_date,
+            self.shown_bi,
+            self.shown_sql,
+            self.shown_total,
+            self.rejected_irrelevant,
+            self.status_bi,
+            self.status_sql,
+            self.streak_zero_bi,
+            self.streak_zero_sql,
+            self.notes,
+            self.shown_telegram,
+            self.status_telegram,
+            self.streak_zero_telegram,
+        ]
+
+
+FREELANCE_METRICS_HEADER = [
+    "Дата запуску",
+    "Показано (BI и аналитика данных)",
+    "Показано (Базы данных и SQL)",
+    "Показано разом",
+    "Відхилено як нерелевантні",
+    "Статус BI и аналитика данных",
+    "Статус Базы данных и SQL",
+    "Дні поспіль з 0 (BI и аналитика данных)",
+    "Дні поспіль з 0 (Базы данных и SQL)",
+    "Примітки",
+    "Показано (Telegram-канал)",
+    "Статус Telegram-каналу",
+    "Дні поспіль з 0 (Telegram-канал)",
+]
+
+
 @dataclass
 class RunMetrics:
     run_date: str
@@ -148,6 +247,11 @@ class SelfCheckResult:
     only_low_or_zero_at_full_coverage: str
     low_match_streak_signal: bool
     notes: str = ""
+    # Крок 1.2 (фріланс) — статус + примітка, окремою колонкою в кінці
+    # таблиці (як і в текстовій версії промпту: нова колонка додається в
+    # кінець, щоб не зсувати вже наявні історичні рядки).
+    step1_2_status: str = "НЕ ВИКОНАНО"
+    step1_2_note: str = ""
 
     def as_row(self) -> list:
         return [
@@ -165,6 +269,7 @@ class SelfCheckResult:
             + (f" ({self.trend_comparable_reason})" if not self.trend_comparable and self.trend_comparable_reason else ""),
             self.only_low_or_zero_at_full_coverage,
             self.notes or "без зауважень",
+            f"{self.step1_2_status}" + (f" — {self.step1_2_note}" if self.step1_2_note else ""),
         ]
 
 
@@ -180,4 +285,5 @@ SELFCHECK_HEADER = [
     "Порівнюваність тренду",
     "Лише Low/нуль при 5/5",
     "Примітки",
+    "Крок 1.2 (фріланс)",
 ]

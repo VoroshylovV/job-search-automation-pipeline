@@ -24,7 +24,7 @@ from config import (
     MAX_EXPERIENCE_YEARS,
     MIN_SALARY_UAH,
 )
-from models import RawJobPosting
+from models import RawFreelanceProject, RawJobPosting
 
 VACANCY_EVAL_SYSTEM_PROMPT = f"""Ти оцінюєш вакансії Data Analyst / Product Analyst \
 для кандидата з таким профілем:
@@ -161,6 +161,66 @@ status=null.
     }}
   ]
 }}"""
+
+
+FREELANCE_EVAL_SYSTEM_PROMPT = f"""Ти оцінюєш фріланс-проєкти/пости для \
+кандидата {CANDIDATE.name}, який шукає НЕ роботу за наймом, а невеликі \
+тренувальні/практичні фріланс-проєкти (1-2 на тиждень) для напрацювання \
+портфоліо. Реальні практичні навички кандидата: {", ".join(CANDIDATE.real_skills)}.
+
+На відміну від оцінки вакансій — тут НЕМАЄ градації рівнів (High/Medium/Low), \
+лише бінарна релевантність: is_relevant=true, якщо є хоч якийсь дотик до \
+аналізу даних, SQL, звітності, BI-інструментів, Excel/Google Sheets. \
+is_relevant=false — якщо проєкт формально потрапив у категорію/стрічку, але \
+по суті не про це (адміністрування серверів, розробка "з нуля" без \
+аналітичної складової, CRM/no-code автоматизація без аналітики, дизайн тощо).
+
+Бюджет НЕ є критерієм фільтрації (на Freelancehunt він часто не вказаний \
+або визначається на торгах) — не відхиляй проєкт через відсутність/малий \
+бюджет.
+
+Для кожного проєкту, що пройшов фільтр релевантності, визнач:
+- posted_date: якщо в тексті є вказівка на дату/час публікації — ISO-дата \
+(сьогодні: {{today}}), інакше null з date_undetermined=true.
+- why_relevant: 1 речення — який саме дотик до аналізу даних/SQL/BI \
+присутній.
+
+Поверни СТРОГО валідний JSON (без markdown-обгортки):
+{{
+  "evaluations": [
+    {{
+      "raw_index": <int>,
+      "is_relevant": <bool>,
+      "why_relevant": <string або null>,
+      "posted_date": <"YYYY-MM-DD" або null>,
+      "date_undetermined": <bool>
+    }}
+  ]
+}}
+Один об'єкт evaluations на кожен проєкт/пост зі вхідного списку, у тому ж \
+порядку/кількості."""
+
+
+def build_freelance_eval_prompt(
+    raw_projects: list[RawFreelanceProject], today: date | None = None
+) -> str:
+    today = today or date.today()
+    payload = [
+        {
+            "raw_index": i,
+            "source": p.source,
+            "category": p.category,
+            "title": p.title,
+            "url": p.url,
+            "posted_raw": p.posted_raw,
+            "description_snippet": p.description_snippet,
+        }
+        for i, p in enumerate(raw_projects)
+    ]
+    system = FREELANCE_EVAL_SYSTEM_PROMPT.replace("{today}", today.isoformat())
+    return system + "\n\nСьогоднішня дата: " + today.isoformat() + "\n\nПроєкти/пости:\n" + json.dumps(
+        payload, ensure_ascii=False, indent=2
+    )
 
 
 def build_email_classify_prompt(raw_emails: list[dict]) -> str:

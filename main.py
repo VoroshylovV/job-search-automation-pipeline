@@ -18,6 +18,7 @@ from zoneinfo import ZoneInfo
 
 from config import CANDIDATE_LOCAL_TZ
 from google_services import notify
+from pipeline.step1_2_freelance import run_step1_2
 from pipeline.step1_vacancies import run_step1
 from pipeline.step2_mail import run_step2
 from pipeline.step3_metrics import run_step3
@@ -30,8 +31,22 @@ logging.basicConfig(
 logger = logging.getLogger("main")
 
 
+def _format_freelance_project(v) -> list[str]:
+    lines = [f"- **{v.title}** | {v.category} | [{v.source}]({v.url})"]
+    if v.competition_level:
+        lines.append(f"  - Кількість ставок: {v.bids_count} ({v.competition_level} конкуренція)")
+    lines.append(f"  - Бюджет: {v.budget_raw or 'не вказано'}")
+    lines.append(f"  - Дата публікації: {v.posted_date or 'невизначена'}")
+    lines.append(f"  - Чому пройшов фільтр: {v.why_relevant}\n")
+    return lines
+
+
 def format_report(
-    step1_result: dict, step2_result: dict, step3_result: dict, step4_result: dict
+    step1_result: dict,
+    step1_2_result: dict,
+    step2_result: dict,
+    step3_result: dict,
+    step4_result: dict,
 ) -> str:
     lines: list[str] = []
     vacancies = step1_result["vacancies"]
@@ -59,6 +74,22 @@ def format_report(
         lines.append(f"⚠️ Недоступні джерела в цьому запуску: {', '.join(unavailable)}\n")
     if step1_result.get("dedup_log_note"):
         lines.append(f"⚠️ {step1_result['dedup_log_note']}\n")
+
+    lines.append("\n## Крок 1.2 — фріланс-проєкти\n")
+    projects = step1_2_result.get("projects", [])
+    if not projects:
+        lines.append("Нових релевантних фріланс-проєктів не знайдено.\n")
+    else:
+        for v in projects:
+            lines.extend(_format_freelance_project(v))
+
+    fl_unavailable = [
+        s.source for s in step1_2_result.get("source_statuses", {}).values() if s.status == "недоступне"
+    ]
+    if fl_unavailable:
+        lines.append(f"⚠️ Недоступні джерела Кроку 1.2 у цьому запуску: {', '.join(fl_unavailable)}\n")
+    if step1_2_result.get("dedup_log_note"):
+        lines.append(f"⚠️ {step1_2_result['dedup_log_note']}\n")
 
     lines.append("\n## Крок 2 — пошта\n")
     findings = step2_result.get("findings", [])
@@ -113,9 +144,27 @@ def main() -> int:
             "dedup_level_used": 0,
         }
 
-    # Крок 2 виконується завжди, незалежно від результату Кроку 1 (те саме
-    # правило, що й у чат-версії промпту) — тому окремий try/except, а не
-    # залежність від успіху блоку вище.
+    # Крок 1.2 виконується ЗАВЖДИ одразу після Кроку 1, незалежно від його
+    # результату — той самий принцип "наступний крок не залежить від успіху
+    # попереднього", що й для Кроку 2 нижче.
+    try:
+        step1_2_result = run_step1_2(utc_today=utc_today, local_today=local_today)
+    except Exception:
+        logger.exception("Крок 1.2 критично провалився")
+        step1_2_result = {
+            "projects": [],
+            "source_statuses": {},
+            "dedup_log_updated": False,
+            "dedup_log_note": "Крок 1.2 критично провалився, див. лог помилок.",
+            "metrics_saved": False,
+            "metrics_error": "Крок 1.2 критично провалився",
+            "reviewed_by_category": {},
+            "rejected_irrelevant": 0,
+        }
+
+    # Крок 2 виконується завжди, незалежно від результату Кроків 1/1.2 (те
+    # саме правило, що й у чат-версії промпту) — тому окремий try/except, а
+    # не залежність від успіху блоків вище.
     try:
         step2_result = run_step2()
     except Exception:
@@ -128,10 +177,14 @@ def main() -> int:
     try:
         step3_result = run_step3(step1_result, step2_result, utc_today=utc_today)
         step4_result = run_step4(
-            step1_result, step2_result, step3_result, timestamp_utc=selfcheck_timestamp
+            step1_result,
+            step2_result,
+            step3_result,
+            timestamp_utc=selfcheck_timestamp,
+            step1_2_result=step1_2_result,
         )
 
-        report = format_report(step1_result, step2_result, step3_result, step4_result)
+        report = format_report(step1_result, step1_2_result, step2_result, step3_result, step4_result)
         print(report)
 
         with open(f"reports/report_{utc_today.isoformat()}.md", "w", encoding="utf-8") as f:

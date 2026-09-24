@@ -79,6 +79,33 @@ def _step3_metrics_status(step3_result: dict) -> tuple[str, str]:
     return "НЕ ВИКОНАНО", str(step3_result.get("error", ""))
 
 
+def _step1_2_status(step1_2_result: dict) -> tuple[str, str]:
+    """Крок 1.2 (фріланс) — валідний, якщо: (а) обидва джерела перевірено
+    штатно АБО явно позначені недоступними; (б) лог дублів оновлено АБО
+    явно позначено, що не вдалось; (в) метрику збережено. Дзеркалить
+    критерії _step1_status вище, але для 2 джерел (freelancehunt.com +
+    telegram), не 5."""
+    statuses = step1_2_result.get("source_statuses", {})
+    ok_count = sum(1 for s in statuses.values() if s.status == "OK")
+    total = len(statuses) or 2
+
+    notes = []
+    if ok_count < total:
+        notes.append(f"джерел перевірено {ok_count}/{total}")
+    if not step1_2_result.get("dedup_log_updated") and step1_2_result.get("dedup_log_note"):
+        notes.append("дедублікація не виконана (лог недоступний)")
+    if not step1_2_result.get("metrics_saved"):
+        notes.append(f"метрику не збережено: {step1_2_result.get('metrics_error', '')}")
+
+    if ok_count == total and step1_2_result.get("metrics_saved"):
+        status = "OK"
+    elif ok_count == 0 and not step1_2_result.get("metrics_saved"):
+        status = "НЕ ВИКОНАНО"
+    else:
+        status = "ЧАСТКОВО"
+    return status, "; ".join(n for n in notes if n)
+
+
 def _collection_method(collection_methods: dict[str, str], source_statuses: dict) -> str:
     ok_methods = {
         collection_methods.get(name, "не_встановлено")
@@ -138,10 +165,14 @@ def run_step4(
     step2_result: dict,
     step3_result: dict,
     timestamp_utc: str,
+    step1_2_result: dict | None = None,
 ) -> dict:
     step1_status, step1_note = _step1_status(step1_result)
     step2_status, step2_note = _step2_status(step2_result)
     step3_metrics_status, step3_metrics_note = _step3_metrics_status(step3_result)
+    step1_2_status, step1_2_note = (
+        _step1_2_status(step1_2_result) if step1_2_result is not None else ("НЕ ВИКОНАНО", "Крок 1.2 не запускався")
+    )
 
     source_statuses = step1_result.get("source_statuses", {})
     sources_ok_count = sum(1 for s in source_statuses.values() if s.status == "OK")
@@ -182,6 +213,8 @@ def run_step4(
         trend_comparable_reason=trend_reason,
         only_low_or_zero_at_full_coverage=only_low_or_zero,
         low_match_streak_signal=False,  # оновиться нижче, після читання історії
+        step1_2_status=step1_2_status,
+        step1_2_note=step1_2_note,
     )
 
     saved = False
@@ -213,6 +246,8 @@ def format_selfcheck_block(result: SelfCheckResult) -> str:
         + ("%" if result.conversion_pct != "н/д" else ""),
         "Порівнюваність тренду: "
         + ("так" if result.trend_comparable else f"ні ({result.trend_comparable_reason})"),
+        f"Крок 1.2 (фріланс): {result.step1_2_status}"
+        + (f" — {result.step1_2_note}" if result.step1_2_note else " — без зауважень"),
     ]
     if result.low_match_streak_signal:
         lines.append(
