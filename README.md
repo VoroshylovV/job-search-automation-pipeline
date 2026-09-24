@@ -1,5 +1,7 @@
 # Job Search Automation Pipeline
 
+[![Tests](https://github.com/VoroshylovV/job-search-automation-pipeline/actions/workflows/tests.yml/badge.svg)](https://github.com/VoroshylovV/job-search-automation-pipeline/actions/workflows/tests.yml)
+
 Python-версія щоденного пошуку вакансій, яка раніше жила як текстовий промт
 scheduled-задачі. Той самий "мозок" (Claude оцінює вакансії й листи), але:
 
@@ -26,6 +28,9 @@ claude_orchestrator/      — prompts.py (тексти), client.py (виклик
 pipeline/                 — step1_vacancies.py, step1_2_freelance.py, step2_mail.py,
                              step3_metrics.py, step4_selfcheck.py
 main.py                   — точка входу, формує фінальний звіт (report_<дата>.md) і шле push
+tests/                     — pytest, усі Google/Claude API замоковано (див. "Тести" нижче)
+conftest.py                — гарантує корінь репо на sys.path для тестів
+.github/workflows/tests.yml — CI: той самий pytest-набір на кожен push/PR у main
 ```
 
 ## Встановлення
@@ -55,6 +60,24 @@ cp .env.example .env   # і заповни ANTHROPIC_API_KEY
 
 `credentials/` — обов'язково додай у `.gitignore`, там лежать секрети.
 
+## Тести
+
+```bash
+pip install -r requirements-dev.txt
+pytest -v
+```
+
+Усі тести (`tests/`) мокають Google Drive/Docs/Sheets і виклик Claude API
+(`unittest.mock.patch`) — не потребують ні `credentials/`, ні
+`ANTHROPIC_API_KEY`, ні мережі, і ганяються за долі секунди. Покривають:
+дворівневу дедублікацію Кроку 1 (лог -> фолбек на таблицю відгуків),
+єдинорівневу дедублікацію Кроку 1.2, фільтр вікна дат "сьогодні/вчора",
+ліміт `UNKNOWN_DATE_FALLBACK_LIMIT` для вакансій з невизначеною датою,
+рівні конкуренції фрілансу (`_competition_level`), і деривацію статусів
+Кроку 4 (`_step1_status`/`_step1_2_status`). Той самий набір ганяє GitHub
+Actions на кожен push/PR у `main` (`.github/workflows/tests.yml`) — бейдж
+угорі README.
+
 ## Запуск
 
 ```bash
@@ -72,6 +95,15 @@ python main.py
 - **GitHub Actions** (`schedule: cron: '0 9 * * *'`) — зручно, якщо код у
   приватному репозиторії; секрети (ANTHROPIC_API_KEY, вміст token.json) —
   через GitHub Secrets.
+
+Структуровані логи пайплайн пише сам у `logs/pipeline.log`, і сам їх
+ротує (`RotatingFileHandler`, 5 файлів по 2 МБ — старе відсікається
+автоматично, не наростає роками). Якщо у cron-рядку вище лишити
+`>> logs/cron.log 2>&1` як тонкий підстраховуючий захват "сирого" stdout/
+stderr (на випадок падіння ще ДО того, як логер устиг налаштуватись) — цей
+файл САМ пайплайн не ротує, це вже відповідальність shell/cron; або
+онов його `logrotate`, або просто прибери редірект — звіт і так завжди є
+в `reports/report_<дата>.md`.
 
 ## Push-сповіщення
 

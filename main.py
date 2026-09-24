@@ -12,6 +12,8 @@ Actions schedule (див. README.md, розділ "Планування запу
 from __future__ import annotations
 
 import logging
+import logging.handlers
+import os
 import sys
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
@@ -24,10 +26,26 @@ from pipeline.step2_mail import run_step2
 from pipeline.step3_metrics import run_step3
 from pipeline.step4_selfcheck import format_selfcheck_block, run_step4
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+os.makedirs("reports", exist_ok=True)
+os.makedirs("logs", exist_ok=True)
+
+_LOG_FORMAT = "%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+_root_logger = logging.getLogger()
+_root_logger.setLevel(logging.INFO)
+
+_console_handler = logging.StreamHandler()
+_console_handler.setFormatter(logging.Formatter(_LOG_FORMAT))
+_root_logger.addHandler(_console_handler)
+
+# RotatingFileHandler, а не basicConfig(filename=...): при щоденному cron
+# (README, "Планування запуску") лог інакше ріс би необмежено місяцями.
+# 5 файлів по 2 МБ ~= 10 МБ на диску максимум, старе відсікається само.
+_file_handler = logging.handlers.RotatingFileHandler(
+    "logs/pipeline.log", maxBytes=2_000_000, backupCount=5, encoding="utf-8"
 )
+_file_handler.setFormatter(logging.Formatter(_LOG_FORMAT))
+_root_logger.addHandler(_file_handler)
+
 logger = logging.getLogger("main")
 
 
@@ -203,7 +221,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    import os
-
-    os.makedirs("reports", exist_ok=True)
     sys.exit(main())
