@@ -74,6 +74,8 @@ def format_report(
         lines.append(f"⚠️ Недоступні джерела в цьому запуску: {', '.join(unavailable)}\n")
     if step1_result.get("dedup_log_note"):
         lines.append(f"⚠️ {step1_result['dedup_log_note']}\n")
+    if step1_result.get("unknown_date_note"):
+        lines.append(f"⚠️ {step1_result['unknown_date_note']}\n")
 
     lines.append("\n## Крок 1.2 — фріланс-проєкти\n")
     projects = step1_2_result.get("projects", [])

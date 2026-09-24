@@ -36,6 +36,7 @@ from config import (
     RESUME_FOLDER_ID,
     TRACKER_SHEET_TITLE,
     TRACKER_URL_COLUMN_HEADER,
+    UNKNOWN_DATE_FALLBACK_LIMIT,
 )
 from google_services import docs, drive, sheets
 from models import RawJobPosting, ScoredVacancy, SourceStatus
@@ -162,6 +163,7 @@ def run_step1(utc_today: date | None = None, local_today: date | None = None) ->
         "dedup_log_updated": False,
         "dedup_log_note": "",
         "dedup_level_used": 0,
+        "unknown_date_note": "",
     }
     if not raw_jobs:
         return empty_result
@@ -195,6 +197,14 @@ def run_step1(utc_today: date | None = None, local_today: date | None = None) ->
         dedup_level_used = 2 if tracker_urls is not None else 0
 
     scored: list[ScoredVacancy] = []
+    # Дату не завжди вдається розпізнати (ні скрапер, ні Claude не витягли
+    # жодної вказівки з posted_raw/description_snippet) — вікно "сьогодні/
+    # вчора" тоді просто не застосовне, і вакансія свідомо НЕ відкидається
+    # (могла бути свіжою). Але без обмеження це дірка у фільтрі "останні 2
+    # дні": ліміт нижче — свідоме рішення, скільки таких вакансій пускати
+    # в звіт за один запуск, а не забутий рудимент чат-версії.
+    unknown_date_shown = 0
+    unknown_date_limit_hit = False
     for i, job in enumerate(raw_jobs):
         ev = eval_by_index.get(i)
         if not ev or not ev.get("passes_criteria"):
@@ -210,6 +220,12 @@ def run_step1(utc_today: date | None = None, local_today: date | None = None) ->
                 parsed = None
             if parsed and parsed not in (local_today, local_yesterday):
                 continue  # поза вікном "останні 2 дні" (місцевий час кандидата) — не показуємо
+
+        if date_undetermined:
+            if unknown_date_shown >= UNKNOWN_DATE_FALLBACK_LIMIT:
+                unknown_date_limit_hit = True
+                continue  # дата невідома, і ліміт показу таких вакансій за цей запуск вичерпано
+            unknown_date_shown += 1
 
         vacancy = ScoredVacancy(
             title=ev.get("normalized_title") or job.title,
@@ -269,6 +285,14 @@ def run_step1(utc_today: date | None = None, local_today: date | None = None) ->
             dedup_log_note = f"лог дублів не вдалось оновити: {exc}"
             logger.exception("Не вдалось оновити лог дублів")
 
+    unknown_date_note = (
+        f"Ліміт показу вакансій з невизначеною датою публікації вичерпано "
+        f"(UNKNOWN_DATE_FALLBACK_LIMIT={UNKNOWN_DATE_FALLBACK_LIMIT} за цей запуск) — "
+        "частину відфільтровано, хоча за іншими критеріями вони пройшли."
+        if unknown_date_limit_hit
+        else ""
+    )
+
     return {
         "vacancies": scored,
         "total_found_before_filters": total_found_before_filters,
@@ -277,4 +301,5 @@ def run_step1(utc_today: date | None = None, local_today: date | None = None) ->
         "dedup_log_updated": dedup_log_updated,
         "dedup_log_note": dedup_log_note,
         "dedup_level_used": dedup_level_used,
+        "unknown_date_note": unknown_date_note,
     }

@@ -86,9 +86,9 @@ low_match_location=true з поясненням (юридичний/податк
 
 Дата публікації: якщо в наданому тексті (posted_raw або description_snippet) \
 є вказівка на дату/скільки часу тому опубліковано — розрахуй posted_date як \
-ISO-дату (сьогодні: {{today}}) і date_undetermined=false. Якщо вказівки \
-немає взагалі — posted_date=null, date_undetermined=true (це не означає \
-відхилення — просто позначка).
+ISO-дату (сьогоднішня дата вказана в самому кінці цього повідомлення) і \
+date_undetermined=false. Якщо вказівки немає взагалі — posted_date=null, \
+date_undetermined=true (це не означає відхилення — просто позначка).
 
 Поверни СТРОГО валідний JSON (без markdown-обгортки, без пояснень поза JSON) \
 за схемою:
@@ -130,8 +130,11 @@ def build_vacancy_eval_prompt(raw_jobs: list[RawJobPosting], today: date | None 
         }
         for i, job in enumerate(raw_jobs)
     ]
-    system = VACANCY_EVAL_SYSTEM_PROMPT.replace("{today}", today.isoformat())
-    return system + "\n\nСьогоднішня дата: " + today.isoformat() + "\n\nВакансії:\n" + json.dumps(
+    # "Сьогодні" підставляється рівно один раз, простим конкатом (як і в
+    # build_email_classify_prompt) — без плейсхолдера всередині константи
+    # VACANCY_EVAL_SYSTEM_PROMPT, щоб не тримати f-string-екранування
+    # ({{ }}) і .replace() як дві паралельні механіки для того самого.
+    return VACANCY_EVAL_SYSTEM_PROMPT + "\n\nСьогоднішня дата: " + today.isoformat() + "\n\nВакансії:\n" + json.dumps(
         payload, ensure_ascii=False, indent=2
     )
 
@@ -181,7 +184,8 @@ is_relevant=false — якщо проєкт формально потрапив 
 
 Для кожного проєкту, що пройшов фільтр релевантності, визнач:
 - posted_date: якщо в тексті є вказівка на дату/час публікації — ISO-дата \
-(сьогодні: {{today}}), інакше null з date_undetermined=true.
+(сьогоднішня дата вказана в самому кінці цього повідомлення), інакше null \
+з date_undetermined=true.
 - why_relevant: 1 речення — який саме дотик до аналізу даних/SQL/BI \
 присутній.
 
@@ -217,8 +221,7 @@ def build_freelance_eval_prompt(
         }
         for i, p in enumerate(raw_projects)
     ]
-    system = FREELANCE_EVAL_SYSTEM_PROMPT.replace("{today}", today.isoformat())
-    return system + "\n\nСьогоднішня дата: " + today.isoformat() + "\n\nПроєкти/пости:\n" + json.dumps(
+    return FREELANCE_EVAL_SYSTEM_PROMPT + "\n\nСьогоднішня дата: " + today.isoformat() + "\n\nПроєкти/пости:\n" + json.dumps(
         payload, ensure_ascii=False, indent=2
     )
 
