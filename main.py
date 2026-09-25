@@ -28,6 +28,15 @@ from pipeline.step3_tracker import run_step3_tracker
 from pipeline.step4_selfcheck import format_selfcheck_block, run_step4
 from pipeline.step5_comparison import format_comparison_block, run_step5
 
+# Windows: при перенаправленні stdout у файл (Task Scheduler -> logs/scheduler.log)
+# Python бере системне кодування (cp1250/cp1251), кирилиця ламається, а print()
+# звіту міг би впасти з UnicodeEncodeError. Примусово UTF-8 для обох потоків.
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except (AttributeError, ValueError):
+        pass
+
 os.makedirs("reports", exist_ok=True)
 os.makedirs("logs", exist_ok=True)
 
