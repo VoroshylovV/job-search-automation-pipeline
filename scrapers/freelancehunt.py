@@ -19,6 +19,7 @@
 """
 from __future__ import annotations
 
+import logging
 import re
 from typing import Iterator
 
@@ -32,6 +33,8 @@ from config import (
 )
 from models import RawFreelanceProject
 from scrapers.base import ScraperError, fetch, get_session
+
+logger = logging.getLogger(__name__)
 
 # Перша сторінка кожної категорії, без пагінації — узгоджено з рештою
 # скраперів пайплайна (жоден поки не гортає сторінки, див. README).
@@ -133,9 +136,16 @@ def _scrape_api(token: str) -> Iterator[RawFreelanceProject]:
 
 
 def scrape() -> Iterator[RawFreelanceProject]:
+    """API, якщо є токен; якщо API впало повністю (невалідний токен -> 401,
+    мережа) — фолбек на HTML-скрапінг, щоб джерело не губилось через токен."""
     if FREELANCEHUNT_API_TOKEN:
-        yield from _scrape_api(FREELANCEHUNT_API_TOKEN)
-        return
+        try:
+            projects = list(_scrape_api(FREELANCEHUNT_API_TOKEN))
+        except ScraperError as exc:
+            logger.warning("Freelancehunt API недоступне (%s) — фолбек на HTML. Перевір FREELANCEHUNT_API_TOKEN у .env", exc)
+        else:
+            yield from projects
+            return
     yield from _scrape_html()
 
 

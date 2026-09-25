@@ -142,3 +142,17 @@ def test_impersonated_session_falls_back_to_requests_without_curl_cffi():
         session = base.get_session(impersonate=True)
     assert type(session).__module__.startswith("requests")
     assert "Chrome" in session.headers["User-Agent"]
+
+
+def test_freelancehunt_falls_back_to_html_when_api_fails():
+    from scrapers import freelancehunt as fh
+
+    def boom(_token):
+        raise base.ScraperError("HTTP 401")
+        yield  # pragma: no cover
+
+    sentinel = object()
+    with patch.object(fh, "FREELANCEHUNT_API_TOKEN", "bad"), \
+         patch.object(fh, "_scrape_api", boom), \
+         patch.object(fh, "_scrape_html", lambda: iter([sentinel])):
+        assert list(fh.scrape()) == [sentinel]
