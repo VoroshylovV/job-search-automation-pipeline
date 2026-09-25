@@ -27,7 +27,15 @@ LISTING_URLS = [
 JOB_LINK_RE = re.compile(r"^/jobs/\d+/?$")
 
 
+# Дата з атрибута title посилання: "Аналітик, вакансія від 22 вересня 2026"
+TITLE_DATE_RE = re.compile(r"вакансія від (.+)$")
+
+
 def _parse_card(card) -> RawJobPosting | None:
+    """Картка вакансії work.ua (розмітка звірена з живим HTML 25.09.2026):
+    div.card.job-link > h2 > a[href=/jobs/<id>/, title="<назва>, вакансія від <дата>"];
+    компанія — span.strong-600 поруч з іконкою .glyphicon-company;
+    короткий опис — p.ellipsis; вимоги/локація — div.text-indent."""
     link = card.find("a", href=JOB_LINK_RE)
     if link is None:
         return None
@@ -35,19 +43,49 @@ def _parse_card(card) -> RawJobPosting | None:
     url = BASE_URL + href if href.startswith("/") else href
     title = link.get_text(strip=True)
 
-    company_el = card.find(class_=re.compile("add-top-xs|company", re.I))
-    company = company_el.get_text(strip=True) if company_el else ""
+    posted_raw = ""
+    m = TITLE_DATE_RE.search(link.get("title", ""))
+    if m:
+        posted_raw = m.group(1).strip()
 
-    full_text = card.get_text(" ", strip=True)
+    company = ""
+    icon = card.find(class_="glyphicon-company")
+    if icon is not None:
+        name_el = icon.find_next("span", class_="strong-600")
+        if name_el is not None:
+            company = name_el.get_text(strip=True)
+
+    salary_raw = ""
+    salary_icon = card.find(class_="glyphicon-hryvnia-fill")
+    if salary_icon is not None:
+        sal_el = salary_icon.find_next("span", class_="strong-600")
+        if sal_el is not None:
+            salary_raw = re.sub(r"\s+", " ", sal_el.get_text(strip=True))  # нерозривні пробіли -> звичайні
+
+    details = [el.get_text(" ", strip=True) for el in card.find_all(class_="text-indent")]
+    desc_el = card.find("p", class_="ellipsis")
+    description = desc_el.get_text(" ", strip=True) if desc_el else ""
+    snippet = re.sub(r"\s+", " ", " | ".join(x for x in [*details, description] if x))
 
     return RawJobPosting(
         source="work.ua",
         title=title,
         company=company,
         url=url,
-        posted_raw="",
-        salary_raw="",
-        description_snippet=full_text[:600],
+        posted_raw=posted_raw,
+        salary_raw=salary_raw,
+        description_snippet=snippet[:600],
+    )
+
+
+def _find_card(link):
+    """Уся картка вакансії (div.card.job-link), а не найближчий div навколо h2 —
+    раніше бралась саме обгортка заголовка, тому компанія/опис губились."""
+    return (
+        link.find_parent(class_="job-link")
+        or link.find_parent(class_="card")
+        or link.find_parent(["div", "li"])
+        or link.parent
     )
 
 
@@ -66,8 +104,7 @@ def scrape() -> Iterator[RawJobPosting]:
         any_success = True
         soup = BeautifulSoup(resp.text, "html.parser")
         for link in soup.find_all("a", href=JOB_LINK_RE):
-            card = link.find_parent(["div", "li"]) or link.parent
-            job = _parse_card(card)
+            job = _parse_card(_find_card(link))
             if job is None or job.url in seen:
                 continue
             seen.add(job.url)

@@ -10,3 +10,7 @@ credentials/
 # Локальні артефакти запуску
 reports/
 *.log
+
+# діагностичні дампи сторінок (dump_html.py)
+debug_*.html
+dump_html.py

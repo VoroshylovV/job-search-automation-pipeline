@@ -9,6 +9,12 @@
 дивись README, розділ "Якщо requests+BeautifulSoup не бачить вакансій":
 там описано, як підключити playwright замість requests лише для цього
 модуля, не чіпаючи решту пайплайну.
+
+Оновлення 25.09.2026: живий HTML підтвердив, що сторінки пошуку — порожня
+Angular-оболонка (<app-root></app-root>) без жодних вакансій і без
+вбудованого JSON; дані сторінка підтягує з JSON-API. Тому основний шлях
+тепер — те саме публічне API пошуку (ROBOTA_API_URL), а HTML-парсинг
+лишається запасним.
 """
 from __future__ import annotations
 
@@ -28,6 +34,10 @@ LISTING_URLS = [
     f"{BASE_URL}/zapros/data-analyst/ukraine",
     f"{BASE_URL}/zapros/product-analyst/ukraine",
 ]
+
+# Публічне API пошуку вакансій, з якого бере дані сам сайт.
+ROBOTA_API_URL = "https://api.robota.ua/vacancy/search"
+API_KEYWORDS = ["data analyst", "product analyst"]
 
 # Посилання на вакансію: /companyXXXXX/vacancyXXXXXXXX
 JOB_LINK_RE = re.compile(r"/company\d+/vacancy\d+")
@@ -75,8 +85,72 @@ def _parse_html_cards(soup: BeautifulSoup) -> Iterator[RawJobPosting]:
         )
 
 
+def _api_doc_to_job(doc: dict) -> RawJobPosting | None:
+    """Один документ відповіді API: {id, name, companyName, notebookId,
+    date, cityName, salary, shortDescription, ...}."""
+    vacancy_id = doc.get("id")
+    title = str(doc.get("name") or "").strip()
+    if not vacancy_id or not title:
+        return None
+    notebook_id = doc.get("notebookId")
+    url = (
+        f"{BASE_URL}/company{notebook_id}/vacancy{vacancy_id}"
+        if notebook_id
+        else f"{BASE_URL}/vacancy{vacancy_id}"
+    )
+    salary = doc.get("salary")
+    salary_raw = str(salary) if salary not in (None, 0, "0", "") else ""
+    city = str(doc.get("cityName") or "")
+    description = re.sub(r"<[^>]+>", " ", str(doc.get("shortDescription") or ""))
+    snippet = re.sub(r"\s+", " ", f"{city} | {description}".strip(" |"))
+    return RawJobPosting(
+        source="robota.ua",
+        title=title,
+        company=str(doc.get("companyName") or ""),
+        url=url,
+        posted_raw=str(doc.get("date") or ""),
+        salary_raw=salary_raw,
+        description_snippet=snippet[:600],
+    )
+
+
+def _scrape_api(session) -> list[RawJobPosting]:
+    jobs: list[RawJobPosting] = []
+    seen: set[str] = set()
+    ok = False
+    last_error: Exception | None = None
+    for kw in API_KEYWORDS:
+        try:
+            payload = fetch(session, ROBOTA_API_URL, params={"keyWords": kw}).json()
+        except (ScraperError, ValueError) as exc:
+            last_error = exc
+            continue
+        ok = True
+        docs = payload.get("documents") or payload.get("vacancies") or [] if isinstance(payload, dict) else []
+        for doc in docs:
+            job = _api_doc_to_job(doc) if isinstance(doc, dict) else None
+            if job is None or job.url in seen:
+                continue
+            seen.add(job.url)
+            jobs.append(job)
+    if not ok:
+        raise ScraperError(f"robota.ua API: усі запити провалились ({last_error})")
+    return jobs
+
+
 def scrape() -> Iterator[RawJobPosting]:
     session = get_session(impersonate=True)
+    try:
+        api_jobs = _scrape_api(session)
+    except ScraperError:
+        api_jobs = []
+    if api_jobs:
+        yield from api_jobs
+        return
+    yield from _scrape_html(session)
+
+
+def _scrape_html(session) -> Iterator[RawJobPosting]:
     any_success = False
     last_error: Exception | None = None
     seen_urls: set[str] = set()
