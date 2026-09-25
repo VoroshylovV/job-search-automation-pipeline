@@ -32,6 +32,7 @@ from claude_orchestrator.client import call_json
 from claude_orchestrator.prompts import build_freelance_eval_prompt
 from config import (
     CANDIDATE_LOCAL_TZ,
+    CLAUDE_EVAL_CHUNK_SIZE,
     FREELANCE_DEDUP_LOG_MAX_AGE_DAYS,
     FREELANCE_DEDUP_LOG_TITLE,
     FREELANCEHUNT_LOW_BIDS_MAX,
@@ -71,7 +72,10 @@ def _parse_dedup_log(text: str) -> list[FreelanceDedupEntry]:
         line = line.strip()
         if not line or "|" not in line:
             continue
-        parts = [p.strip() for p in line.split("|")]
+        # maxsplit=2 — та сама причина, що й у step1_vacancies.py::_parse_dedup_log:
+        # назва проєкту (parts[2]) може містити "|", і без обмеження split()
+        # мовчки обрізав би label на першому зайвому символі.
+        parts = [p.strip() for p in line.split("|", 2)]
         if len(parts) < 3:
             continue
         entries.append(FreelanceDedupEntry(shown_date=parts[0], url=parts[1], label=parts[2]))
@@ -187,18 +191,10 @@ def run_step1_2(utc_today: date | None = None, local_today: date | None = None) 
         key = "telegram" if p.source == "telegram" else p.category
         reviewed_by_category[key] = reviewed_by_category.get(key, 0) + 1
 
-    evaluations: list[dict] = []
-    if raw_projects:
-        CHUNK = 40
-        for start in range(0, len(raw_projects), CHUNK):
-            chunk = raw_projects[start : start + CHUNK]
-            prompt = build_freelance_eval_prompt(chunk, today=local_today)
-            result = call_json(prompt)
-            for ev in result.get("evaluations", []):
-                ev["raw_index"] += start
-            evaluations.extend(result.get("evaluations", []))
-    eval_by_index = {ev["raw_index"]: ev for ev in evaluations}
-
+    # Лог дублів читається ДО оцінки Claude (не після, як раніше) — той
+    # самий принцип, що й у step1_vacancies.py::run_step1: URL, уже
+    # присутній у лозі, і так буде відкинутий нижче, тож немає сенсу
+    # платити за оцінку Claude наперед.
     dedup_doc_id, log_text = _read_dedup_log_with_retry()
     dedup_available = log_text is not None
     dedup_log_note = ""
@@ -212,10 +208,39 @@ def run_step1_2(utc_today: date | None = None, local_today: date | None = None) 
         )
     seen_log_urls = {e.url for e in log_entries}
 
+    # Пре-фільтр за URL ДО оцінки Claude — на відміну від вакансій дедуп-ключ
+    # фрілансу завжди `url` (ScoredFreelanceProject.dedup_key), ніколи
+    # нормалізований title/company, тому тут фільтр повний, без застережень
+    # про "лише URL-кейс": усе, що відфільтровано тут, гарантовано було б
+    # відкинуто і пост-оцінковою перевіркою нижче. Помітний побічний ефект:
+    # проєкт, який одночасно і вже показаний, і був би оцінений як
+    # нерелевантний, тепер НЕ потрапляє в rejected_irrelevant (раніше
+    # потрапляв, бо оцінювався раніше дедуп-перевірки) — вважаю це
+    # правильнішим: лічильник "відхилено як нерелевантні" мав би описувати
+    # НОВІ рішення цього запуску, а не вже відомі дублікати.
+    projects_to_evaluate = [p for p in raw_projects if not (dedup_available and p.url in seen_log_urls)]
+    skipped_known_url_count = len(raw_projects) - len(projects_to_evaluate)
+    if skipped_known_url_count:
+        logger.info(
+            "%d фріланс-проєктів відфільтровано за відомим URL ДО оцінки Claude (економія викликів)",
+            skipped_known_url_count,
+        )
+
+    evaluations: list[dict] = []
+    if projects_to_evaluate:
+        for start in range(0, len(projects_to_evaluate), CLAUDE_EVAL_CHUNK_SIZE):
+            chunk = projects_to_evaluate[start : start + CLAUDE_EVAL_CHUNK_SIZE]
+            prompt = build_freelance_eval_prompt(chunk, today=local_today)
+            result = call_json(prompt)
+            for ev in result.get("evaluations", []):
+                ev["raw_index"] += start
+            evaluations.extend(result.get("evaluations", []))
+    eval_by_index = {ev["raw_index"]: ev for ev in evaluations}
+
     scored: list[ScoredFreelanceProject] = []
     rejected_irrelevant = 0
 
-    for i, project in enumerate(raw_projects):
+    for i, project in enumerate(projects_to_evaluate):
         ev = eval_by_index.get(i)
         if not ev or not ev.get("is_relevant"):
             rejected_irrelevant += 1
@@ -231,8 +256,10 @@ def run_step1_2(utc_today: date | None = None, local_today: date | None = None) 
             if parsed and parsed not in (local_today, local_yesterday):
                 continue  # поза вікном свіжості 1-2 дні
 
-        if dedup_available and project.url in seen_log_urls:
-            continue
+        # (Пост-оцінкової дедуп-перевірки тут свідомо немає: на відміну від
+        # вакансій, dedup_key фрілансу — завжди project.url, ніколи
+        # нормалізований title/company, тож пре-фільтр вище вже виключив із
+        # projects_to_evaluate все, що сюди могло б потрапити.)
 
         scored.append(
             ScoredFreelanceProject(

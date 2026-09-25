@@ -30,6 +30,7 @@ from claude_orchestrator.client import call_json
 from claude_orchestrator.prompts import build_vacancy_eval_prompt
 from config import (
     CANDIDATE_LOCAL_TZ,
+    CLAUDE_EVAL_CHUNK_SIZE,
     DATE_WINDOW_DAYS,
     DEDUP_LOG_MAX_AGE_DAYS,
     DEDUP_LOG_TITLE,
@@ -61,7 +62,12 @@ def _parse_dedup_log(text: str) -> list[DedupEntry]:
         line = line.strip()
         if not line or "|" not in line:
             continue
-        parts = [p.strip() for p in line.split("|")]
+        # maxsplit=2: назва посади/компанії (parts[2]) може легітимно містити
+        # "|" (наприклад, у назві проєкту чи описі) — без обмеження split()
+        # мовчки обрізав би label на першому зайвому "|", і для вакансій без
+        # прямого URL (де dedup_key будується з повного "title|company")
+        # обрізаний label більше не збігався б при порівнянні в _is_duplicate.
+        parts = [p.strip() for p in line.split("|", 2)]
         if len(parts) < 3:
             continue
         entries.append(DedupEntry(shown_date=parts[0], identifier=parts[1], label=parts[2]))
@@ -168,21 +174,10 @@ def run_step1(utc_today: date | None = None, local_today: date | None = None) ->
     if not raw_jobs:
         return empty_result
 
-    # Claude оцінює всі зібрані кандидати одним викликом (батч) — за потреби
-    # можна розбити на шматки по ~40 вакансій, якщо контекст завеликий.
-    CHUNK = 40
-    evaluations: list[dict] = []
-    for start in range(0, len(raw_jobs), CHUNK):
-        chunk = raw_jobs[start : start + CHUNK]
-        prompt = build_vacancy_eval_prompt(chunk, today=local_today)
-        result = call_json(prompt)
-        for ev in result.get("evaluations", []):
-            ev["raw_index"] += start  # зсув індексів під повний список
-        evaluations.extend(result.get("evaluations", []))
-
-    eval_by_index = {ev["raw_index"]: ev for ev in evaluations}
-
-    # --- Дедублікація: Рівень 1 (лог), з відкатом на Рівень 2 (таблиця відгуків) ---
+    # --- Дедублікація: Рівень 1 (лог), з відкатом на Рівень 2 (таблиця
+    # відгуків) --- читається ДО оцінки Claude (не після, як раніше), щоб
+    # відомі за URL вакансії можна було відфільтрувати ще до платного
+    # виклику API — див. пре-фільтр нижче.
     dedup_doc_id, log_text = _read_dedup_log_with_retry()
     dedup_level_used = 0
     dedup_log_note = ""
@@ -196,6 +191,40 @@ def run_step1(utc_today: date | None = None, local_today: date | None = None) ->
         tracker_urls, dedup_log_note = _level2_tracker_urls()
         dedup_level_used = 2 if tracker_urls is not None else 0
 
+    # Пре-фільтр за URL ДО оцінки Claude: вакансія з відомим URL, який уже є
+    # в дедуп-джерелі, і так буде відкинута перевіркою нижче — немає сенсу
+    # платити за оцінку Claude наперед. НЕ замінює пост-оцінкову перевірку
+    # нижче (та лишається обов'язковою): для вакансій БЕЗ URL дедуп-ключ
+    # будується з НОРМАЛІЗОВАНИХ title/company, які повертає сам Claude,
+    # тобто відомі лише ПІСЛЯ оцінки — таких пре-фільтром не відсіяти.
+    known_urls: set[str] = set()
+    if dedup_level_used == 1:
+        known_urls = {e.identifier for e in log_entries}
+    elif dedup_level_used == 2:
+        known_urls = tracker_urls or set()
+
+    jobs_to_evaluate = [j for j in raw_jobs if not (j.url and j.url in known_urls)]
+    skipped_known_url_count = len(raw_jobs) - len(jobs_to_evaluate)
+    if skipped_known_url_count:
+        logger.info(
+            "%d вакансій відфільтровано за відомим URL ДО оцінки Claude (економія викликів)",
+            skipped_known_url_count,
+        )
+
+    # Claude оцінює лише те, що не відфільтровано вище, одним викликом на
+    # шматок (config.CLAUDE_EVAL_CHUNK_SIZE) — за потреби зменш його там,
+    # якщо контекст завеликий.
+    evaluations: list[dict] = []
+    for start in range(0, len(jobs_to_evaluate), CLAUDE_EVAL_CHUNK_SIZE):
+        chunk = jobs_to_evaluate[start : start + CLAUDE_EVAL_CHUNK_SIZE]
+        prompt = build_vacancy_eval_prompt(chunk, today=local_today)
+        result = call_json(prompt)
+        for ev in result.get("evaluations", []):
+            ev["raw_index"] += start  # зсув індексів під jobs_to_evaluate
+        evaluations.extend(result.get("evaluations", []))
+
+    eval_by_index = {ev["raw_index"]: ev for ev in evaluations}
+
     scored: list[ScoredVacancy] = []
     # Дату не завжди вдається розпізнати (ні скрапер, ні Claude не витягли
     # жодної вказівки з posted_raw/description_snippet) — вікно "сьогодні/
@@ -205,7 +234,7 @@ def run_step1(utc_today: date | None = None, local_today: date | None = None) ->
     # в звіт за один запуск, а не забутий рудимент чат-версії.
     unknown_date_shown = 0
     unknown_date_limit_hit = False
-    for i, job in enumerate(raw_jobs):
+    for i, job in enumerate(jobs_to_evaluate):
         ev = eval_by_index.get(i)
         if not ev or not ev.get("passes_criteria"):
             continue
