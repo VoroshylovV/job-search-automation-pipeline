@@ -204,3 +204,26 @@ def test_parse_dedup_log_handles_pipe_in_label():
     entries = step1._parse_dedup_log(text)
     assert len(entries) == 1
     assert entries[0].label == "Data Analyst | BI — Company 5"
+
+
+def test_applied_urls_are_excluded_even_when_log_works():
+    """Вакансія з таблиці відгуків (на неї вже подано) не йде в звіт, навіть
+    якщо лог показаних доступний і її там немає (регресія 25.09.2026)."""
+    jobs = [
+        RawJobPosting(source="work.ua", title="Аналітик", company="", url="https://www.work.ua/jobs/7402564/",
+                      posted_raw="", salary_raw="", description_snippet=""),
+    ]
+    calls = []
+
+    def fake_call_json(prompt):
+        calls.append(prompt)
+        return {"evaluations": []}
+
+    with patch.object(step1, "_scrape_all", _fake_scrape_all(jobs)), \
+         patch.object(step1, "call_json", fake_call_json), \
+         patch.object(step1, "_read_dedup_log_with_retry", lambda: ("doc123", "")), \
+         patch.object(step1, "_applied_urls", lambda: {"https://work.ua/jobs/7402564"}), \
+         patch("google_services.docs.replace_full_text", lambda *a, **k: None):
+        result = step1.run_step1(utc_today=date(2026, 9, 25), local_today=date(2026, 9, 25))
+    assert calls == []  # відфільтровано ДО платного виклику Claude
+    assert result["vacancies"] == []

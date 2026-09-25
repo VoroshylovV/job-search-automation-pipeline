@@ -22,6 +22,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -106,6 +107,26 @@ def _read_dedup_log_with_retry() -> tuple[str | None, str | None]:
         except Exception as exc:  # noqa: BLE001
             logger.warning("Спроба %d читання лога дублів провалилась: %s", attempt + 1, exc)
     return doc_id, None
+
+
+def _norm_url(url: str) -> str:
+    """Порівняння URL без різниці http/https, www і фінального слеша."""
+    u = url.strip().lower().split("#")[0]
+    u = re.sub(r"^https?://(www\.)?", "", u)
+    return u.rstrip("/")
+
+
+def _applied_urls() -> set[str]:
+    """URL вакансій з таблиці відгуків (на них уже подано). Помилка читання
+    не валить Крок 1 — просто порожня множина з попередженням."""
+    try:
+        tracker = drive.find_file_by_title(TRACKER_SHEET_TITLE, RESUME_FOLDER_ID)
+        if not tracker:
+            return set()
+        return set(sheets.read_column_by_header(tracker["id"], TRACKER_URL_COLUMN_HEADER))
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("Не вдалося прочитати URL з таблиці відгуків: %s", exc)
+        return set()
 
 
 def _level2_tracker_urls() -> tuple[set[str] | None, str]:
@@ -200,10 +221,16 @@ def run_step1(utc_today: date | None = None, local_today: date | None = None) ->
     known_urls: set[str] = set()
     if dedup_level_used == 1:
         known_urls = {e.identifier for e in log_entries}
+        # Вакансії, на які ВЖЕ подано (таблиця відгуків), виключаються
+        # завжди, а не лише коли лог недоступний: 25.09.2026 у звіт
+        # потрапили work.ua/jobs/7402564 і /8519788 — обидві вже в таблиці
+        # (Hay credito, Plamigo), але ще не в 21-денному лозі показаних.
+        known_urls |= _applied_urls()
     elif dedup_level_used == 2:
         known_urls = tracker_urls or set()
+    known_urls = {_norm_url(u) for u in known_urls}
 
-    jobs_to_evaluate = [j for j in raw_jobs if not (j.url and j.url in known_urls)]
+    jobs_to_evaluate = [j for j in raw_jobs if not (j.url and _norm_url(j.url) in known_urls)]
     skipped_known_url_count = len(raw_jobs) - len(jobs_to_evaluate)
     if skipped_known_url_count:
         logger.info(
