@@ -18,13 +18,14 @@ import sys
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
-from config import CANDIDATE_LOCAL_TZ
+from config import CANDIDATE_LOCAL_TZ, COMPARISON_SHEET_TITLE
 from google_services import notify
 from pipeline.step1_2_freelance import run_step1_2
 from pipeline.step1_vacancies import run_step1
 from pipeline.step2_mail import run_step2
 from pipeline.step3_metrics import run_step3
 from pipeline.step4_selfcheck import format_selfcheck_block, run_step4
+from pipeline.step5_comparison import format_comparison_block, run_step5
 
 os.makedirs("reports", exist_ok=True)
 os.makedirs("logs", exist_ok=True)
@@ -65,6 +66,7 @@ def format_report(
     step2_result: dict,
     step3_result: dict,
     step4_result: dict,
+    step5_result: dict | None = None,
 ) -> str:
     lines: list[str] = []
     vacancies = step1_result["vacancies"]
@@ -135,6 +137,15 @@ def format_report(
             f"перевірки» продубльовано не було: {step4_result.get('error')}"
         )
 
+    if step5_result and step5_result.get("active"):
+        lines.append("\n\n## Крок 5 — порівняння з автоматичним (чат) запуском\n")
+        lines.append(format_comparison_block(step5_result["row"]))
+        if not step5_result.get("saved"):
+            lines.append(
+                f"\n⚠️ Порівняння виведено вище, але у «{COMPARISON_SHEET_TITLE}» "
+                f"продубльовано не було: {step5_result.get('error')}"
+            )
+
     return "\n".join(lines)
 
 
@@ -204,7 +215,21 @@ def main() -> int:
             step1_2_result=step1_2_result,
         )
 
-        report = format_report(step1_result, step1_2_result, step2_result, step3_result, step4_result)
+        # Крок 5 — порівняння з автоматичним (чат) запуском того самого дня.
+        # Сам себе відключає (result["active"] == False), якщо
+        # config.SERVICE_FILE_TITLE_SUFFIX порожній — тестового режиму
+        # немає, порівнювати канонічний журнал з самим собою нема сенсу.
+        # Окремий try/except: збій порівняння не повинен ховати вже готовий
+        # звіт по Кроках 1-4.
+        try:
+            step5_result = run_step5(step1_result, step1_2_result, step4_result, utc_today=utc_today)
+        except Exception:
+            logger.exception("Крок 5 (порівняння) критично провалився")
+            step5_result = {"active": False}
+
+        report = format_report(
+            step1_result, step1_2_result, step2_result, step3_result, step4_result, step5_result
+        )
         print(report)
 
         with open(f"reports/report_{utc_today.isoformat()}.md", "w", encoding="utf-8") as f:

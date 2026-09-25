@@ -65,8 +65,18 @@ RESUME_FOLDER_ID = "1R_IeQaYOxf8EX6J1CUZpUjcvZaFMJ-7n"  # "Резюме для �
 # журнал (README, "Приклад реального запуску").
 SERVICE_FILE_TITLE_SUFFIX = " (тест гітхаб)"
 
-DEDUP_LOG_TITLE = "Лог показаних вакансій (автопошук)" + SERVICE_FILE_TITLE_SUFFIX
-METRICS_SHEET_TITLE = "Метрики автопошуку вакансій" + SERVICE_FILE_TITLE_SUFFIX
+# Базові (канонічні) назви — БЕЗ суфікса. Потрібні Кроку 5 (порівняння), щоб
+# читати РЕАЛЬНІ файли чат-версії незалежно від SERVICE_FILE_TITLE_SUFFIX
+# вище — Крок 5 порівнює саме канонічний журнал з тестовим, тож завжди має
+# бачити обидві назви одночасно.
+DEDUP_LOG_TITLE_CANONICAL = "Лог показаних вакансій (автопошук)"
+METRICS_SHEET_TITLE_CANONICAL = "Метрики автопошуку вакансій"
+SELFCHECK_SHEET_TITLE_CANONICAL = "Результат щоденної перевірки"
+FREELANCE_DEDUP_LOG_TITLE_CANONICAL = "Лог показаних фріланс-проєктів (автопошук)"
+FREELANCE_METRICS_SHEET_TITLE_CANONICAL = "Метрики автопошуку фріланс-проєктів"
+
+DEDUP_LOG_TITLE = DEDUP_LOG_TITLE_CANONICAL + SERVICE_FILE_TITLE_SUFFIX
+METRICS_SHEET_TITLE = METRICS_SHEET_TITLE_CANONICAL + SERVICE_FILE_TITLE_SUFFIX
 
 # Рівень 2 страховки дедублікації (якщо основний лог недоступний навіть
 # після повторної спроби) — таблиця, яку Володимир заповнює вручну.
@@ -82,7 +92,15 @@ TRACKER_URL_COLUMN_HEADER = "Посилання на вакансію"
 
 # Файл Кроку 4 — самоперевірка запуску (аудит-лог, без обмеження за
 # довжиною, на відміну від дедуп-логу).
-SELFCHECK_SHEET_TITLE = "Результат щоденної перевірки" + SERVICE_FILE_TITLE_SUFFIX
+SELFCHECK_SHEET_TITLE = SELFCHECK_SHEET_TITLE_CANONICAL + SERVICE_FILE_TITLE_SUFFIX
+
+# Крок 5 — порівняння автоматичного (чат) і ручного (Python) запуску того
+# самого дня. Один спільний файл, БЕЗ суфікса — сама його мета в тому, щоб
+# зіставляти обидві системи, тож він не потребує "тестової" версії себе
+# самого. Пишеться лише поки SERVICE_FILE_TITLE_SUFFIX непорожній (див.
+# pipeline/step5_comparison.py) — коли Python перейме канонічний журнал,
+# порівнювати вже нема з чим.
+COMPARISON_SHEET_TITLE = "Порівняльна таблиця автоматичних запусків та запусків вручну"
 
 # Файл, який пайплайн НІКОЛИ не повинен чіпати — особистий ручний трекер
 # співбесід Володимира. Тримаємо тут явно, щоб будь-який код, що працює
@@ -168,8 +186,8 @@ SOURCES = ("djinni.co", "jobs.dou.ua", "robota.ua", "work.ua", "happymonday.ua")
 # (невеликий обсяг, 1-2 проєкти на тиждень, напрацювання практики й
 # портфоліо). Виконується завжди одразу після Кроку 1, незалежно від його
 # результату — та сама логіка "Крок 2 виконується завжди", що й у main.py.
-FREELANCE_DEDUP_LOG_TITLE = "Лог показаних фріланс-проєктів (автопошук)" + SERVICE_FILE_TITLE_SUFFIX
-FREELANCE_METRICS_SHEET_TITLE = "Метрики автопошуку фріланс-проєктів" + SERVICE_FILE_TITLE_SUFFIX
+FREELANCE_DEDUP_LOG_TITLE = FREELANCE_DEDUP_LOG_TITLE_CANONICAL + SERVICE_FILE_TITLE_SUFFIX
+FREELANCE_METRICS_SHEET_TITLE = FREELANCE_METRICS_SHEET_TITLE_CANONICAL + SERVICE_FILE_TITLE_SUFFIX
 
 # 10 днів, коротше вікно ніж 21 день у вакансіях — фріланс-проєкти
 # закриваються швидше, довше вікно тримало б у логу вже неактуальні записи.

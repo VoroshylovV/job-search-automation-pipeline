@@ -29,14 +29,14 @@ scheduled-задачі. Той самий "мозок" (Claude оцінює ва
 config.py                 — усі бізнес-правила (профіль, пороги, назви файлів, часові пояси)
 models.py                 — dataclasses: RawJobPosting, ScoredVacancy, RawFreelanceProject,
                              ScoredFreelanceProject, EmailFinding, RunMetrics, FreelanceRunMetrics,
-                             SelfCheckResult
+                             SelfCheckResult, ComparisonRow (Крок 5)
 scrapers/                 — по одному модулю на джерело:
                                вакансії — djinni, dou, robota, workua, happymonday
                                фріланс (Крок 1.2) — freelancehunt, telegram_channel
 google_services/          — auth.py, drive.py, docs.py, sheets.py, gmail.py, notify.py (push)
 claude_orchestrator/      — prompts.py (тексти), client.py (виклик Anthropic API)
 pipeline/                 — step1_vacancies.py, step1_2_freelance.py, step2_mail.py,
-                             step3_metrics.py, step4_selfcheck.py
+                             step3_metrics.py, step4_selfcheck.py, step5_comparison.py
 main.py                   — точка входу, формує фінальний звіт (report_<дата>.md) і шле push
 tests/                     — pytest, усі Google/Claude API замоковано (див. "Тести" нижче)
 conftest.py                — гарантує корінь репо на sys.path для тестів
@@ -78,14 +78,15 @@ pip install -r requirements-dev.txt
 pytest -v
 ```
 
-Усі тести (`tests/`) мокають Google Drive/Docs/Sheets і виклик Claude API
-(`unittest.mock.patch`) — не потребують ні `credentials/`, ні
+Усі тести (`tests/`, 29 штук) мокають Google Drive/Docs/Sheets і виклик
+Claude API (`unittest.mock.patch`) — не потребують ні `credentials/`, ні
 `ANTHROPIC_API_KEY`, ні мережі, і ганяються за долі секунди. Покривають:
 дворівневу дедублікацію Кроку 1 (лог -> фолбек на таблицю відгуків),
 єдинорівневу дедублікацію Кроку 1.2, фільтр вікна дат "сьогодні/вчора",
 ліміт `UNKNOWN_DATE_FALLBACK_LIMIT` для вакансій з невизначеною датою,
-рівні конкуренції фрілансу (`_competition_level`), і деривацію статусів
-Кроку 4 (`_step1_status`/`_step1_2_status`). Той самий набір ганяє GitHub
+рівні конкуренції фрілансу (`_competition_level`), деривацію статусів
+Кроку 4 (`_step1_status`/`_step1_2_status`), і Крок 5 (порівняння
+канонічних/тестових даних, підрахунок перетину URL). Той самий набір ганяє GitHub
 Actions на кожен push/PR у `main` (`.github/workflows/tests.yml`) — бейдж
 угорі README.
 
@@ -115,10 +116,26 @@ python main.py
 суфікса: пайплайн лише читає цю таблицю, ніколи не пише, тож їй завжди
 потрібен саме реальний файл.
 
+**Крок 5 — порівняння** (`pipeline/step5_comparison.py`) автоматично
+вмикається, поки `SERVICE_FILE_TITLE_SUFFIX` непорожній (і сам вимикається,
+щойно його прибрати — порівнювати канонічний журнал із самим собою нема
+сенсу). Щодня, одразу після Кроку 4, він читає КАНОНІЧНІ (без суфікса)
+файли чат-версії за сьогодні — обидва дедуп-логи, обидві таблиці метрик,
+самоперевірку — і зіставляє їх із щойно готовими результатами цього ж
+Python-запуску: знайдено/показано з обох боків, перетин URL (скільки
+вакансій/проєктів показали ОБИДВІ системи), скільки показала лише одна
+сторона, статус Кроку 4 з обох боків. Результат — один рядок на день у
+новій таблиці **"Порівняльна таблиця автоматичних запусків та запусків
+вручну"** (`config.COMPARISON_SHEET_TITLE`, створюється сама при першому
+запуску) — і той самий блок одразу у звіті (`reports/report_<дата>.md`,
+розділ "Крок 5"). Якщо канонічних даних за сьогодні ще немає (автозапуск
+не встиг відпрацювати) — відповідні клітинки "н/д", решта порівняння все
+одно рахується.
+
 Коли звірення завершиться і canonical hand-off буде готовий — постав
 `SERVICE_FILE_TITLE_SUFFIX = ""` у `config.py`: наступний запуск почне
 писати в ті самі файли, що й чат-версія, продовжуючи той самий журнал
-(див. "Приклад реального запуску" вище).
+(див. "Приклад реального запуску" вище), а Крок 5 сам себе вимкне.
 
 ## Планування запуску
 

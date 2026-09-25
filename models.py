@@ -287,3 +287,72 @@ SELFCHECK_HEADER = [
     "Примітки",
     "Крок 1.2 (фріланс)",
 ]
+
+
+# --------------------------------------------------------------------------
+# Крок 5 — порівняння автоматичного (чат-версія) і ручного (Python) запуску
+# того самого дня. Пишеться лише в тестовому режимі
+# (config.SERVICE_FILE_TITLE_SUFFIX непорожній) — див.
+# pipeline/step5_comparison.py.
+# --------------------------------------------------------------------------
+@dataclass
+class ComparisonRow:
+    run_date: str
+    v_found_auto: Optional[int]  # None -> "н/д" (авто-дані за сьогодні недоступні)
+    v_found_manual: int
+    v_shown_auto: Optional[int]
+    v_shown_manual: int
+    v_url_overlap: Optional[int]  # спільні URL (показані і там, і там)
+    v_url_only_auto: Optional[int]
+    v_url_only_manual: Optional[int]
+    f_shown_auto: Optional[int]  # Крок 1.2, сума BI+SQL+Telegram
+    f_shown_manual: int
+    f_url_overlap: Optional[int]
+    step4_sources_auto: str  # "X/5" або "н/д"
+    step4_sources_manual: str
+    step4_status_auto: str  # "OK"|"ЧАСТКОВО"|"НЕ ВИКОНАНО"|"н/д"
+    step4_status_manual: str
+    notes: str = ""
+
+    def as_row(self) -> list:
+        def _s(v):
+            return "н/д" if v is None else v
+
+        return [
+            self.run_date,
+            _s(self.v_found_auto),
+            self.v_found_manual,
+            _s(self.v_shown_auto),
+            self.v_shown_manual,
+            _s(self.v_url_overlap),
+            _s(self.v_url_only_auto),
+            _s(self.v_url_only_manual),
+            _s(self.f_shown_auto),
+            self.f_shown_manual,
+            _s(self.f_url_overlap),
+            self.step4_sources_auto,
+            self.step4_sources_manual,
+            self.step4_status_auto,
+            self.step4_status_manual,
+            self.notes or "без зауважень",
+        ]
+
+
+COMPARISON_HEADER = [
+    "Дата запуску",
+    "Крок 1: знайдено (авто)",
+    "Крок 1: знайдено (вручну/Python)",
+    "Крок 1: показано (авто)",
+    "Крок 1: показано (вручну/Python)",
+    "Крок 1: перетин URL",
+    "Крок 1: лише авто",
+    "Крок 1: лише вручну",
+    "Крок 1.2: показано (авто)",
+    "Крок 1.2: показано (вручну/Python)",
+    "Крок 1.2: перетин URL",
+    "Крок 4: джерела (авто)",
+    "Крок 4: джерела (вручну/Python)",
+    "Крок 4: статус Кроку 1 (авто)",
+    "Крок 4: статус Кроку 1 (вручну/Python)",
+    "Примітки",
+]
