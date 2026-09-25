@@ -52,7 +52,7 @@ def _parse_card(card) -> RawJobPosting | None:
 
 
 def scrape() -> Iterator[RawJobPosting]:
-    session = get_session()
+    session = get_session(impersonate=True)
     seen: set[str] = set()
     any_success = False
     last_error: Exception | None = None

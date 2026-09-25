@@ -77,18 +77,57 @@ def read_column_by_header(spreadsheet_id: str, column_header: str) -> list[str]:
     без прив'язки до фіксованого номера колонки, бо Володимир іноді
     редагує/перевпорядковує цю таблицю вручну."""
     rows = read_values(spreadsheet_id)
-    if not rows:
+    located = find_header_row(rows, column_header)
+    if located is None:
         return []
-    header = rows[0]
-    try:
-        idx = header.index(column_header)
-    except ValueError:
-        return []
+    header_row_idx, idx = located
     values: list[str] = []
-    for row in rows[1:]:
+    for row in rows[header_row_idx + 1:]:
         if idx < len(row) and row[idx].strip():
             values.append(row[idx].strip())
     return values
+
+
+HEADER_SEARCH_ROWS = 5
+
+
+def find_header_row(rows: list[list[str]], column_header: str) -> tuple[int, int] | None:
+    """(індекс_рядка_заголовків, індекс_колонки) або None.
+
+    Шукає заголовок у перших HEADER_SEARCH_ROWS рядках, а не лише в рядку 1:
+    у таблиці відгуків рядок 1 — об'єднана "шапка" ("Interview — ПІП
+    студента: ..."), справжні заголовки колонок — у рядку 2. Раніше пошук
+    лише в rows[0] мовчки повертав [] і Рівень 2 дедублікації не працював.
+    """
+    target = column_header.strip()
+    for r_idx, row in enumerate(rows[:HEADER_SEARCH_ROWS]):
+        for c_idx, cell in enumerate(row):
+            if cell.strip() == target:
+                return r_idx, c_idx
+    return None
+
+
+def update_cells(spreadsheet_id: str, updates: list[tuple[str, str]], sheet_name: str | None = None) -> None:
+    """Точкове оновлення клітинок: [(A1-адреса, значення), ...] одним
+    batchUpdate. Реальне редагування на місці — форматування й решта
+    клітинок не чіпаються."""
+    if not updates:
+        return
+    guard_not_forbidden(spreadsheet_id)
+    service = sheets_service()
+    prefix = f"'{sheet_name}'!" if sheet_name else ""
+    service.spreadsheets().values().batchUpdate(
+        spreadsheetId=spreadsheet_id,
+        body={
+            "valueInputOption": "RAW",
+            "data": [{"range": f"{prefix}{addr}", "values": [[value]]} for addr, value in updates],
+        },
+    ).execute()
+
+
+def col_letter(n: int) -> str:
+    """Публічна обгортка: 1-indexed номер колонки -> буква."""
+    return _col_letter(n)
 
 
 def read_last_data_rows(spreadsheet_id: str, n: int) -> list[list[str]]:

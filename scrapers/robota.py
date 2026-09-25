@@ -76,7 +76,7 @@ def _parse_html_cards(soup: BeautifulSoup) -> Iterator[RawJobPosting]:
 
 
 def scrape() -> Iterator[RawJobPosting]:
-    session = get_session()
+    session = get_session(impersonate=True)
     any_success = False
     last_error: Exception | None = None
     seen_urls: set[str] = set()

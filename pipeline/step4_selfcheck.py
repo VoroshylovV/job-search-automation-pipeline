@@ -6,16 +6,12 @@
 сталося в цьому запуску (4.1-4.4), плюс одне читання власної короткої
 історії для евристики 4.3.
 
-ВАЖЛИВЕ й чесне обмеження цієї Python-реалізації: "Крок 3 (додатковий
-блок)" чат-версії промпту (оновлення таблиці "Ворошилов відгуки на
-вакансії" на основі фактів із розмовної пам'яті користувача) тут НЕ
-реалізовано — і структурно не може бути реалізовано автономним cron-
-скриптом: він читає /areas/job-search.md та інші memory-файли акаунту
-Claude, до яких у самостійного Python-процесу просто немає доступу (це
-не Google API, а внутрішня пам'ять асистента). step3_tracker_status тому
-завжди "НЕ ВИКОНАНО" з поясненням — не помилка, а задокументована межа
-архітектури. Таблицю відгуків Володимир або оновлює вручну, або просить
-Claude оновити її окремо в чаті.
+"Крок 3 (додатковий блок)" — оновлення таблиці "Ворошилов відгуки на
+вакансії". Чат-версія брала факти з розмовної пам'яті Claude, недоступної
+автономному скрипту; Python-версія натомість бере їх із пошти (листи-
+відмови/запрошення з Кроку 2) — див. pipeline/step3_tracker.py. Статус
+рядка тут — результат саме цього блоку; якщо його не передано (старий
+виклик), лишається "НЕ ВИКОНАНО" з поясненням.
 """
 from __future__ import annotations
 
@@ -166,6 +162,7 @@ def run_step4(
     step3_result: dict,
     timestamp_utc: str,
     step1_2_result: dict | None = None,
+    step3_tracker_result: dict | None = None,
 ) -> dict:
     step1_status, step1_note = _step1_status(step1_result)
     step2_status, step2_note = _step2_status(step2_result)
@@ -204,8 +201,8 @@ def run_step4(
         step2_note=step2_note,
         step3_metrics_status=step3_metrics_status,
         step3_metrics_note=step3_metrics_note,
-        step3_tracker_status="НЕ ВИКОНАНО",
-        step3_tracker_note=TRACKER_NOT_IMPLEMENTED_NOTE,
+        step3_tracker_status=(step3_tracker_result or {}).get("status", "НЕ ВИКОНАНО"),
+        step3_tracker_note=(step3_tracker_result or {}).get("note", TRACKER_NOT_IMPLEMENTED_NOTE),
         sources_ok_count=sources_ok_count,
         collection_method=collection_method,
         conversion_pct=conversion_pct,

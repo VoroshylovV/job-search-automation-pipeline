@@ -24,6 +24,7 @@ from pipeline.step1_2_freelance import run_step1_2
 from pipeline.step1_vacancies import run_step1
 from pipeline.step2_mail import run_step2
 from pipeline.step3_metrics import run_step3
+from pipeline.step3_tracker import run_step3_tracker
 from pipeline.step4_selfcheck import format_selfcheck_block, run_step4
 from pipeline.step5_comparison import format_comparison_block, run_step5
 
@@ -207,12 +208,20 @@ def main() -> int:
     # впаде — той самий принцип "сповіщення завжди", що й у чат-версії.
     try:
         step3_result = run_step3(step1_result, step2_result, utc_today=utc_today)
+        # Крок 3 (таблиця відгуків) — власний try: збій запису в ручну
+        # таблицю не повинен ховати метрики/самоперевірку/звіт.
+        try:
+            step3_tracker_result = run_step3_tracker(step2_result)
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("Крок 3 (таблиця відгуків) провалився")
+            step3_tracker_result = {"status": "НЕ ВИКОНАНО", "note": f"помилка: {exc}", "applied": [], "skipped": []}
         step4_result = run_step4(
             step1_result,
             step2_result,
             step3_result,
             timestamp_utc=selfcheck_timestamp,
             step1_2_result=step1_2_result,
+            step3_tracker_result=step3_tracker_result,
         )
 
         # Крок 5 — порівняння з автоматичним (чат) запуском того самого дня.
