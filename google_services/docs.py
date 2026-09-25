@@ -47,7 +47,10 @@ def replace_full_text(document_id: str, new_text: str) -> None:
     requests_batch = []
     # Google Docs: не можна видалити ВЕСЬ вміст (мінімум лишається порожній
     # параграф), тому видаляємо [1, end_index - 1), якщо є що видаляти.
-    if end_index > 1:
+    # Порожній документ має end_index == 2 (лише фінальний "\n") — діапазон
+    # [1, 1) порожній, і Docs API відхиляє його з HTTP 400 ("The range should
+    # not be empty"), тому поріг саме > 2, а не > 1.
+    if end_index > 2:
         requests_batch.append(
             {"deleteContentRange": {"range": {"startIndex": 1, "endIndex": end_index - 1}}}
         )
