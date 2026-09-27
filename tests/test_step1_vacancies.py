@@ -227,3 +227,24 @@ def test_applied_urls_are_excluded_even_when_log_works():
         result = step1.run_step1(utc_today=date(2026, 9, 25), local_today=date(2026, 9, 25))
     assert calls == []  # відфільтровано ДО платного виклику Claude
     assert result["vacancies"] == []
+
+
+def test_decisions_log_covers_every_raw_job():
+    jobs = [_job(i) for i in range(4)]
+    evals = [
+        _eval(0, posted_date="2026-09-24"),                    # показано
+        {**_eval(1, passes=False), "reject_code": "досвід"},   # відсіяно моделлю
+        _eval(2, posted_date="2020-01-01"),                    # поза вікном дат
+    ]                                                          # 3 — модель не повернула оцінку
+
+    with patch.object(step1, "_scrape_all", _fake_scrape_all(jobs)), \
+         patch.object(step1, "call_json", lambda prompt: {"evaluations": evals}), \
+         patch.object(step1, "_read_dedup_log_with_retry", lambda: (None, "")):
+        result = step1.run_step1(utc_today=date(2026, 9, 24), local_today=date(2026, 9, 24))
+
+    by_url = {d["url"]: d for d in result["decisions"]}
+    assert len(result["decisions"]) == len(jobs)
+    assert by_url["https://example.com/0"]["result"] == "показано"
+    assert by_url["https://example.com/1"]["code"] == "досвід"
+    assert by_url["https://example.com/2"]["code"] == "дата"
+    assert by_url["https://example.com/3"]["code"] == "інше"

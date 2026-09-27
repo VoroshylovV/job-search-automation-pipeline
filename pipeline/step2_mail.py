@@ -29,6 +29,8 @@ def _extract_company_names() -> list[str]:
         name = f["name"]
         if name in SERVICE_FILE_TITLES:
             continue
+        if f.get("mimeType") == "application/vnd.google-apps.folder":
+            continue  # підпапки (напр. "Лог причин відсіву вакансій") — не компанії
         stem = re.sub(r"\.(pdf|docx?|xlsx?)$", "", name, flags=re.I)
         tokens = re.split(r"[_\-\s]+", stem)
         cleaned = [

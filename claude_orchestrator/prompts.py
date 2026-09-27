@@ -98,6 +98,9 @@ date_undetermined=true (це не означає відхилення — про
       "raw_index": <int, індекс з вхідного списку>,
       "passes_criteria": <bool>,
       "reject_reason": <string або null>,
+      "reject_code": <null якщо passes_criteria=true, інакше ОДИН з: \
+"роль"|"досвід"|"формат"|"ЗП"|"англійська"|"інше" — перший критерій, \
+на якому вакансію відхилено>,
       "normalized_title": <string>,
       "normalized_company": <string, БЕЗ "CV"/"Resume"/"Junior"/назви ролі — \
 лише власна назва компанії>,

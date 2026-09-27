@@ -174,6 +174,29 @@ def _scrape_all(today: date) -> tuple[list[RawJobPosting], dict[str, SourceStatu
     return all_jobs, statuses, collection_methods
 
 
+def _decision(job: RawJobPosting, result: str, code: str, detail: str = "",
+              posted_date: str | None = None, date_source: str = "") -> dict:
+    """Рядок діагностичного логу причин відсіву (див. pipeline/reject_log.py)."""
+    return {
+        "source": job.source,
+        "url": job.url or "",
+        "label": f"{job.title} — {job.company}",
+        "result": result,
+        "code": code,
+        "detail": detail,
+        "posted_date": posted_date or "",
+        "date_source": date_source,
+    }
+
+
+def _date_source(job: RawJobPosting, ev: dict | None) -> str:
+    if job.posted_raw:
+        return "картка"
+    if ev and ev.get("posted_date") and not ev.get("date_undetermined"):
+        return "опис"
+    return "невідома"
+
+
 def run_step1(utc_today: date | None = None, local_today: date | None = None) -> dict:
     utc_today = utc_today or datetime.now(timezone.utc).date()
     local_today = local_today or datetime.now(ZoneInfo(CANDIDATE_LOCAL_TZ)).date()
@@ -191,6 +214,7 @@ def run_step1(utc_today: date | None = None, local_today: date | None = None) ->
         "dedup_log_note": "",
         "dedup_level_used": 0,
         "unknown_date_note": "",
+        "decisions": [],
     }
     if not raw_jobs:
         return empty_result
@@ -219,18 +243,28 @@ def run_step1(utc_today: date | None = None, local_today: date | None = None) ->
     # будується з НОРМАЛІЗОВАНИХ title/company, які повертає сам Claude,
     # тобто відомі лише ПІСЛЯ оцінки — таких пре-фільтром не відсіяти.
     known_urls: set[str] = set()
+    applied_norm: set[str] = set()
     if dedup_level_used == 1:
         known_urls = {e.identifier for e in log_entries}
         # Вакансії, на які ВЖЕ подано (таблиця відгуків), виключаються
         # завжди, а не лише коли лог недоступний: 25.09.2026 у звіт
         # потрапили work.ua/jobs/7402564 і /8519788 — обидві вже в таблиці
         # (Hay credito, Plamigo), але ще не в 21-денному лозі показаних.
-        known_urls |= _applied_urls()
+        applied = _applied_urls()
+        applied_norm = {_norm_url(u) for u in applied}
+        known_urls |= applied
     elif dedup_level_used == 2:
         known_urls = tracker_urls or set()
     known_urls = {_norm_url(u) for u in known_urls}
 
-    jobs_to_evaluate = [j for j in raw_jobs if not (j.url and _norm_url(j.url) in known_urls)]
+    decisions: list[dict] = []
+    jobs_to_evaluate = []
+    for j in raw_jobs:
+        if j.url and _norm_url(j.url) in known_urls:
+            code = "подано" if _norm_url(j.url) in applied_norm else "дубль"
+            decisions.append(_decision(j, "відсіяно", code, "відомий URL до оцінки", date_source=_date_source(j, None)))
+        else:
+            jobs_to_evaluate.append(j)
     skipped_known_url_count = len(raw_jobs) - len(jobs_to_evaluate)
     if skipped_known_url_count:
         logger.info(
@@ -263,7 +297,14 @@ def run_step1(utc_today: date | None = None, local_today: date | None = None) ->
     unknown_date_limit_hit = False
     for i, job in enumerate(jobs_to_evaluate):
         ev = eval_by_index.get(i)
-        if not ev or not ev.get("passes_criteria"):
+        if not ev:
+            decisions.append(_decision(job, "відсіяно", "інше", "модель не повернула оцінку", date_source=_date_source(job, None)))
+            continue
+        if not ev.get("passes_criteria"):
+            decisions.append(_decision(
+                job, "відсіяно", ev.get("reject_code") or "інше", ev.get("reject_reason") or "",
+                ev.get("posted_date"), _date_source(job, ev),
+            ))
             continue
 
         posted_date = ev.get("posted_date")
@@ -275,11 +316,13 @@ def run_step1(utc_today: date | None = None, local_today: date | None = None) ->
                 date_undetermined = True
                 parsed = None
             if parsed and parsed not in (local_today, local_yesterday):
+                decisions.append(_decision(job, "відсіяно", "дата", "поза вікном сьогодні/вчора", posted_date, _date_source(job, ev)))
                 continue  # поза вікном "останні 2 дні" (місцевий час кандидата) — не показуємо
 
         if date_undetermined:
             if unknown_date_shown >= UNKNOWN_DATE_FALLBACK_LIMIT:
                 unknown_date_limit_hit = True
+                decisions.append(_decision(job, "відсіяно", "ліміт_невизначеної_дати", "", None, "невідома"))
                 continue  # дата невідома, і ліміт показу таких вакансій за цей запуск вичерпано
             unknown_date_shown += 1
 
@@ -299,13 +342,19 @@ def run_step1(utc_today: date | None = None, local_today: date | None = None) ->
 
         if dedup_level_used == 1:
             if _is_duplicate(vacancy.dedup_key(), log_entries):
+                decisions.append(_decision(job, "відсіяно", "дубль", "після оцінки", posted_date, _date_source(job, ev)))
                 continue
         elif dedup_level_used == 2:
             if vacancy.url and vacancy.url in (tracker_urls or set()):
+                decisions.append(_decision(job, "відсіяно", "подано", "рівень 2", posted_date, _date_source(job, ev)))
                 continue
         # dedup_level_used == 0: обидва рівні недоступні — показуємо без дедублікації.
 
         scored.append(vacancy)
+        decisions.append(_decision(
+            job, "показано", "—", vacancy.match_level,
+            posted_date, "невідома" if date_undetermined else _date_source(job, ev),
+        ))
 
     scored.sort(key=lambda v: MATCH_ORDER.get(v.match_level, 3))
 
@@ -358,4 +407,5 @@ def run_step1(utc_today: date | None = None, local_today: date | None = None) ->
         "dedup_log_note": dedup_log_note,
         "dedup_level_used": dedup_level_used,
         "unknown_date_note": unknown_date_note,
+        "decisions": decisions,
     }

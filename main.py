@@ -22,6 +22,7 @@ from config import CANDIDATE_LOCAL_TZ, COMPARISON_SHEET_TITLE
 from google_services import notify
 from pipeline.step1_2_freelance import run_step1_2
 from pipeline.step1_vacancies import run_step1
+from pipeline.reject_log import write_reject_log
 from pipeline.step2_mail import run_step2
 from pipeline.step3_metrics import run_step3
 from pipeline.step3_tracker import run_step3_tracker
@@ -184,6 +185,15 @@ def main() -> int:
             "dedup_log_note": "Крок 1 критично провалився, див. лог помилок.",
             "dedup_level_used": 0,
         }
+
+    # Діагностичний лог причин відсіву (порівняння з онлайн-версією).
+    # Збій не впливає на решту запуску.
+    try:
+        write_reject_log(step1_result.get("decisions", []), utc_today)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Лог причин відсіву не записано")
+        note = step1_result.get("dedup_log_note") or ""
+        step1_result["dedup_log_note"] = (note + "; " if note else "") + f"лог причин відсіву не записано: {exc}"
 
     # Крок 1.2 виконується ЗАВЖДИ одразу після Кроку 1, незалежно від його
     # результату — той самий принцип "наступний крок не залежить від успіху
