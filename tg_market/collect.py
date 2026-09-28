@@ -32,7 +32,7 @@ PAUSE_SECONDS = 1.5  # ввічлива пауза між сторінками t
 POST_FIELDS = ["channel", "post_id", "datetime", "views", "is_vacancy", "vacancy_count", "collected_at"]
 VAC_FIELDS = ["channel", "post_id", "datetime", "vacancy_idx", "title", "company", "is_it", "direction",
               "level", "experience_years_min", "skills", "work_format", "remote_scope", "salary_stated",
-              "salary_min", "salary_max", "salary_currency", "link"]
+              "salary_min", "salary_max", "salary_currency", "salary_period", "link"]
 
 
 def load_channels(panel: str) -> list[dict]:

@@ -30,6 +30,16 @@ def parse_views(raw: str) -> int | None:
     return int(round(num * mult))
 
 
+def _external_links(el) -> list[str]:
+    """Посилання з тексту поста (get_text їх губить). Профілі t.me — це контакти, їх не беремо."""
+    out = []
+    for a in el.select("a[href]"):
+        href = a["href"]
+        if href.startswith("http") and "t.me/" not in href and href not in out:
+            out.append(href)
+    return out
+
+
 def parse_page(html: str, channel: str) -> list[Post]:
     soup = BeautifulSoup(html, "html.parser")
     posts: list[Post] = []
@@ -43,12 +53,14 @@ def parse_page(html: str, channel: str) -> list[Post]:
         if time_el is None:
             continue
         text_el = msg.select_one("div.tgme_widget_message_text")
+        links = _external_links(text_el) if text_el else []
         views_el = msg.select_one("span.tgme_widget_message_views")
         posts.append(Post(
             channel=channel,
             post_id=post_id,
             datetime=time_el["datetime"],
             views=parse_views(views_el.get_text(strip=True)) if views_el else None,
-            text=text_el.get_text("\n", strip=True) if text_el else "",
+            text=(text_el.get_text("\n", strip=True) if text_el else "") + (
+                "\nПосилання: " + " ".join(links) if links else ""),
         ))
     return posts

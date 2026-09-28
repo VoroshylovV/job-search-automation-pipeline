@@ -14,6 +14,8 @@ def test_parse_page_extracts_id_date_views_text():
     assert posts[0].views == 1700
     assert posts[1].views == 970
     assert "Power BI" in posts[0].text
+    assert "https://bit.ly/abc" in posts[0].text          # посилання на вакансію зберігається для Claude
+    assert "recruiter_name" not in posts[0].text.split("Посилання:")[-1]  # контакт t.me — ні
 
 
 def test_parse_views_units():
