@@ -91,3 +91,25 @@ def test_classify_splits_chunk_on_truncated_json(monkeypatch):
     monkeypatch.setattr(col, "call_json", fake)
     res = col.classify(posts)
     assert set(res) >= {"c/0", "c/1", "c/2"}      # решта розібрана попри збої
+
+
+def test_reclassify_creative_design_and_ngo_analyst():
+    from tg_market.analyze import reclassify
+    g = {"title": "Графічний дизайнер/графічна дизайнерка", "direction": "design", "is_it": "True"}
+    assert reclassify(g) == "creative-design→marketing" and g["is_it"] == "False"
+    ux = {"title": "Brand & UI/UX Designer", "direction": "design", "is_it": "True"}
+    assert reclassify(ux) is None and ux["is_it"] == "True"
+    meal = {"title": "MEAL-менеджер", "direction": "analytics", "is_it": "True"}
+    assert reclassify(meal) == "non-data-analyst→non-it"
+    da = {"title": "Junior Data Analyst", "direction": "analytics", "is_it": "True"}
+    assert reclassify(da) is None
+
+
+def test_normalize_skills_and_full_weeks():
+    from tg_market.analyze import normalize_skills, full_weeks
+    us = [{"skills": "Git; SQL"}, {"skills": "git; Git"}, {"skills": ""}]
+    normalize_skills(us)
+    assert us[0]["skills"] == "Git; SQL" and us[1]["skills"] == "Git"
+    rows = [{"first_seen": d} for d in ("2026-08-01", "2026-08-03", "2026-08-09", "2026-08-10")]
+    # 01.08 (субота) — неповний тиждень; 10.08 — понеділок останнього неповного тижня
+    assert [r["first_seen"] for r in full_weeks(rows)] == ["2026-08-03", "2026-08-09"]

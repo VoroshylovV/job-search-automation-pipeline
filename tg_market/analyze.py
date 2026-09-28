@@ -101,6 +101,56 @@ def _aggregate(cluster: list[dict]) -> dict:
     }
 
 
+# Детерміновані правки поверх класифікації моделі (дешевше й відтворюваніше, ніж перекласифікація).
+# Креативний дизайн (графіка, моушн, арт-дирекція, SMM-візуал) — маркетинг, не IT;
+# UI/UX, product, web, game design лишаються в IT/design.
+_CREATIVE = re.compile(r"graphic|графічн|motion|моушн|art ?director|арт-директор|smm|video editor|storyboard|"
+                       r"2d artist|3d designer|creative designer|marketing design|brand designer", re.I)
+_KEEP_DESIGN = re.compile(r"ui|ux|product designer|web designer|game designer", re.I)
+# «Аналітик» у НГО/безпековому секторі — не аналітика даних.
+_NON_DATA_ANALYST = re.compile(r"meal|monitoring, (evaluation|reporting)|osint|національна безпека|розслідувач", re.I)
+
+
+def reclassify(u: dict) -> str | None:
+    """Повертає причину правки або None; змінює u на місці."""
+    t = u["title"]
+    if u["direction"] == "design" and _CREATIVE.search(t) and not _KEEP_DESIGN.search(t):
+        u["is_it"], u["direction"] = "False", "marketing"
+        return "creative-design→marketing"
+    if u["direction"] == "analytics" and _NON_DATA_ANALYST.search(t):
+        u["is_it"], u["direction"] = "False", "non-it"
+        return "non-data-analyst→non-it"
+    return None
+
+
+def normalize_skills(uniques: list[dict]) -> None:
+    """Одна форма запису для скілу без урахування регістру (git/Git → найчастіша)."""
+    forms = defaultdict(Counter)
+    for u in uniques:
+        for s in (x.strip() for x in u["skills"].split(";")):
+            if s:
+                forms[s.lower()][s] += 1
+    canon = {k: c.most_common(1)[0][0] for k, c in forms.items()}
+    for u in uniques:
+        seen = []
+        for s in (x.strip() for x in u["skills"].split(";")):
+            if s and canon[s.lower()] not in seen:
+                seen.append(canon[s.lower()])
+        u["skills"] = "; ".join(seen)
+
+
+def full_weeks(rows: list[dict]) -> list[dict]:
+    """Лише повні ISO-тижні в межах зібраного періоду (крайні неповні тижні спотворюють частки)."""
+    if not rows:
+        return rows
+    dates = [datetime.fromisoformat(r["first_seen"]).date() for r in rows]
+    lo, hi = min(dates), max(dates)
+    def ok(d):
+        start = d - timedelta(days=d.weekday())
+        return start >= lo and start + timedelta(days=6) <= hi
+    return [r for r, d in zip(rows, dates) if ok(d)]
+
+
 def iso_week(date_str: str) -> str:
     y, w, _ = datetime.fromisoformat(date_str).isocalendar()
     return f"{y}-W{w:02d}"
@@ -164,14 +214,17 @@ def write(name: str, rows: list[dict]) -> None:
 def main() -> None:
     posts, mentions = load("posts.csv"), load("vacancies.csv")
     uniques = dedup(mentions)
+    fixes = Counter(f for f in map(reclassify, uniques) if f)
+    normalize_skills(uniques)
     it = [u for u in uniques if u["is_it"] == "True"]
+    it_w = full_weeks(it)
     week = lambda u: iso_week(u["first_seen"])  # noqa: E731
 
     write("unique_vacancies.csv", uniques)
     write("channel_metrics.csv", channel_metrics(posts, mentions, uniques))
-    write("weekly_direction.csv", shares(it, week, lambda u: u["direction"]))
-    write("weekly_level.csv", shares(it, week, lambda u: u["level"]))
-    write("weekly_format.csv", shares(it, week, lambda u: u["work_format"]))
+    write("weekly_direction.csv", shares(it_w, week, lambda u: u["direction"]))
+    write("weekly_level.csv", shares(it_w, week, lambda u: u["level"]))
+    write("weekly_format.csv", shares(it_w, week, lambda u: u["work_format"]))
     write("direction_level.csv", shares(it, lambda u: u["direction"], lambda u: u["level"]))
     write("direction_format.csv", shares(it, lambda u: u["direction"], lambda u: u["work_format"]))
     write("direction_salary_stated.csv", shares(it, lambda u: u["direction"], lambda u: u["salary_stated"]))
@@ -181,11 +234,16 @@ def main() -> None:
         by_dir[u["direction"]].append({s.strip() for s in u["skills"].split(";") if s.strip()})
     for d, sets in sorted(by_dir.items()):
         n = len(sets)
+        n_sk = sum(1 for st in sets if st)
         for s, c in Counter(s for st in sets for s in st).most_common(20):
             skill_rows.append({"direction": d, "skill": s, "share_pct": round(100 * c / n, 1), "n": n,
-                               "small_sample": n < SMALL_N})
+                               "n_with_skills": n_sk, "small_sample": n < SMALL_N})
     write("skills_by_direction.csv", skill_rows)
     print(f"згадок: {len(mentions)} → унікальних вакансій: {len(uniques)} (IT: {len(it)}); результати в {OUT}")
+    if fixes:
+        print("детерміновані правки класифікації:", dict(fixes))
+    if it_w:
+        print(f"тижневі зрізи: {iso_week(min(u['first_seen'] for u in it_w))} … {iso_week(max(u['first_seen'] for u in it_w))} (лише повні тижні)")
 
 
 if __name__ == "__main__":
