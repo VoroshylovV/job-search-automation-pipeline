@@ -14,3 +14,6 @@ reports/
 # діагностичні дампи сторінок (dump_html.py)
 debug_*.html
 dump_html.py
+
+# tg_market: зібрані дані (лише витягнуті поля, але це робочі дані, не код)
+tg_market/data/
