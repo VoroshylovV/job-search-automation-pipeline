@@ -38,6 +38,8 @@ claude_orchestrator/      — prompts.py (тексти), client.py (виклик
 pipeline/                 — step1_vacancies.py, step1_2_freelance.py, step2_mail.py,
                              step3_metrics.py, step3_tracker.py (таблиця відгуків),
                              step4_selfcheck.py, step5_comparison.py
+tg_market/                — окремий модуль аналітики ринку IT-вакансій у Telegram-каналах
+                             (не імпортується main.py) — див. tg_market/README.md
 scripts/                  — run_pipeline.bat + register_windows_task.ps1 (щоденний запуск на Windows)
 main.py                   — точка входу, формує фінальний звіт (report_<дата>.md) і шле push
 tests/                     — pytest, усі Google/Claude API замоковано (див. "Тести" нижче)
