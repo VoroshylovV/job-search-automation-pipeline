@@ -68,3 +68,26 @@ def test_shares_include_n_and_small_sample_flag():
     out = shares(rows, lambda r: r["d"], lambda r: r["f"])
     remote = next(r for r in out if r["value"] == "remote")
     assert remote["share_pct"] == 66.7 and remote["n"] == 3 and remote["small_sample"] is True
+
+
+def test_classify_splits_chunk_on_truncated_json(monkeypatch):
+    import tg_market.collect as col
+    from claude_orchestrator.client import ClaudeCallError
+    from tg_market.parse import Post
+
+    posts = [Post("c", i, "2026-09-01T00:00:00+00:00", 1, f"t{i}") for i in range(4)]
+    calls = []
+
+    def fake(prompt, max_tokens):
+        n = prompt.count('"key"')
+        calls.append(n)
+        if n > 2:
+            raise ClaudeCallError("обірвано")
+        if '"c/3"' in prompt and n == 1:
+            raise ClaudeCallError("один поганий пост")
+        keys = [f"c/{i}" for i in range(4) if f'"c/{i}"' in prompt]
+        return {"posts": [{"key": k, "is_vacancy": False, "vacancies": []} for k in keys]}
+
+    monkeypatch.setattr(col, "call_json", fake)
+    res = col.classify(posts)
+    assert set(res) >= {"c/0", "c/1", "c/2"}      # решта розібрана попри збої

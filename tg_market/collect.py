@@ -18,7 +18,7 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
-from claude_orchestrator.client import call_json
+from claude_orchestrator.client import ClaudeCallError, call_json
 from scrapers.base import ScraperError, fetch, get_session
 from tg_market.classify import build_prompt, normalize_vacancy
 from tg_market.parse import Post, parse_page
@@ -26,10 +26,10 @@ from tg_market.parse import Post, parse_page
 logger = logging.getLogger("tg_market")
 BASE = Path(__file__).parent
 DATA = BASE / "data"
-CHUNK = 20
+CHUNK = 10  # дайджести з 10+ вакансій у пості роздувають відповідь — менші порції
 PAUSE_SECONDS = 1.5  # ввічлива пауза між сторінками t.me
 
-POST_FIELDS = ["channel", "post_id", "datetime", "views", "is_vacancy", "vacancy_count", "collected_at"]
+POST_FIELDS = ["channel", "post_id", "datetime", "views", "classified", "is_vacancy", "vacancy_count", "collected_at"]
 VAC_FIELDS = ["channel", "post_id", "datetime", "vacancy_idx", "title", "company", "is_it", "direction",
               "level", "experience_years_min", "skills", "work_format", "remote_scope", "salary_stated",
               "salary_min", "salary_max", "salary_currency", "salary_period", "link"]
@@ -65,13 +65,27 @@ def fetch_channel(session, handle: str, since: datetime, min_id: int, max_pages:
     return sorted({p.post_id: p for p in out}.values(), key=lambda p: p.post_id)
 
 
+def _classify_chunk(chunk: list[Post], result: dict[str, dict]) -> None:
+    """Якщо відповідь обірвалась (невалідний JSON) — ділимо порцію навпіл.
+    Один пост, який не вдалося розібрати, пропускаємо з позначкою, а не валимо весь запуск."""
+    try:
+        data = call_json(build_prompt(chunk), max_tokens=16000)
+    except ClaudeCallError as exc:
+        if len(chunk) == 1:
+            logger.warning("%s/%s: не вдалося розібрати (%s) — пропущено", chunk[0].channel, chunk[0].post_id, exc)
+            return
+        mid = len(chunk) // 2
+        _classify_chunk(chunk[:mid], result)
+        _classify_chunk(chunk[mid:], result)
+        return
+    for item in data.get("posts", []):
+        result[str(item.get("key"))] = item
+
+
 def classify(posts: list[Post]) -> dict[str, dict]:
     result: dict[str, dict] = {}
     for i in range(0, len(posts), CHUNK):
-        chunk = posts[i:i + CHUNK]
-        data = call_json(build_prompt(chunk), max_tokens=12000)
-        for item in data.get("posts", []):
-            result[str(item.get("key"))] = item
+        _classify_chunk(posts[i:i + CHUNK], result)
     return result
 
 
@@ -118,10 +132,11 @@ def main() -> None:
         parsed = classify(posts)
         post_rows, vac_rows = [], []
         for p in posts:
-            item = parsed.get(f"{handle}/{p.post_id}", {})
+            key = f"{handle}/{p.post_id}"
+            item = parsed.get(key, {})
             vacs = [normalize_vacancy(v) for v in (item.get("vacancies") or [])] if item.get("is_vacancy") else []
             post_rows.append({"channel": handle, "post_id": p.post_id, "datetime": p.datetime, "views": p.views,
-                              "is_vacancy": bool(vacs), "vacancy_count": len(vacs), "collected_at": collected_at})
+                              "classified": key in parsed, "is_vacancy": bool(vacs), "vacancy_count": len(vacs), "collected_at": collected_at})
             for idx, v in enumerate(vacs):
                 vac_rows.append({"channel": handle, "post_id": p.post_id, "datetime": p.datetime, "vacancy_idx": idx, **v})
         append_csv(DATA / "posts.csv", POST_FIELDS, post_rows)

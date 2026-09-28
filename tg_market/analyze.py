@@ -131,12 +131,14 @@ def channel_metrics(posts: list[dict], mentions: list[dict], uniques: list[dict]
     out = []
     for ch, ps in sorted(by_ch.items()):
         views = [int(p["views"]) for p in ps if p["views"]]
+        done = [p for p in ps if p.get("classified", "True") == "True"]  # нерозібрані пости не рахуємо як «не вакансія»
         weeks = max(1, len({iso_week(p["datetime"]) for p in ps}))
         uniq_it = sum(1 for u in uniques if u["is_it"] == "True" and ch in u["channels"].split("; "))
         out.append({
             "channel": ch,
             "posts": len(ps),
-            "vacancy_post_share_pct": round(100 * sum(p["is_vacancy"] == "True" for p in ps) / len(ps), 1),
+            "unclassified_posts": len(ps) - len(done),
+            "vacancy_post_share_pct": round(100 * sum(p["is_vacancy"] == "True" for p in done) / len(done), 1) if done else None,
             "mentions": ment[ch],
             "it_share_pct": round(100 * it_ment[ch] / ment[ch], 1) if ment[ch] else None,
             "unique_it_vacancies": uniq_it,
