@@ -31,3 +31,40 @@ def test_normalize_vacancy_falls_back_to_allowed_values():
     assert v["level"] == "unspecified"
     assert v["work_format"] == "remote"
     assert v["skills"] == "SQL; Python"
+
+
+def _m(ch, day, title, company="", direction="dev", is_it="True", level="junior", skills=""):
+    return {"channel": ch, "post_id": "1", "datetime": f"2026-08-{day:02d}T10:00:00+00:00", "vacancy_idx": "0",
+            "title": title, "company": company, "is_it": is_it, "direction": direction, "level": level,
+            "experience_years_min": "", "skills": skills, "work_format": "remote", "remote_scope": "",
+            "salary_stated": "False", "salary_min": "", "salary_max": "", "salary_currency": "",
+            "salary_period": "", "link": ""}
+
+
+def test_dedup_merges_reposts_and_fills_company():
+    from tg_market.analyze import dedup
+    rows = [
+        _m("a", 1, "Embedded Hardware Engineer", "Skif", direction="dev"),
+        _m("a", 8, "Embedded Hardware Engineer", "", direction="other-it"),   # репост без компанії
+        _m("b", 9, "Embedded Hardware Engineer (STM32)", "skif", direction="dev"),  # інший канал
+        _m("a", 1, "Junior Python Developer", "X"),
+    ]
+    u = dedup(rows)
+    emb = [x for x in u if "embedded" in x["title"].lower()]
+    assert len(u) == 2 and len(emb) == 1
+    assert emb[0]["mentions"] == 3 and emb[0]["channels"] == "a; b"
+    assert emb[0]["direction"] == "dev"          # мода, а не перша згадка
+
+
+def test_dedup_splits_after_window():
+    from tg_market.analyze import dedup
+    rows = [_m("a", 1, "QA Engineer", "Y"), {**_m("a", 1, "QA Engineer", "Y"), "datetime": "2026-09-20T10:00:00+00:00"}]
+    assert len(dedup(rows)) == 2                  # розрив 50 днів > 30 — нова вакансія
+
+
+def test_shares_include_n_and_small_sample_flag():
+    from tg_market.analyze import shares
+    rows = [{"d": "qa", "f": "remote"}, {"d": "qa", "f": "office"}, {"d": "qa", "f": "remote"}]
+    out = shares(rows, lambda r: r["d"], lambda r: r["f"])
+    remote = next(r for r in out if r["value"] == "remote")
+    assert remote["share_pct"] == 66.7 and remote["n"] == 3 and remote["small_sample"] is True
