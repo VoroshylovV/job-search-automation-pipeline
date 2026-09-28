@@ -10,13 +10,13 @@ lobbyx,core,40
 ITExpert_Vacancies,core,40
 devops_dou,core,40
 dou_qa,core,40
-product_dou,core,40
+product_dou,reference,40
 ai_dou,core,40
 datascienceua,core,40
 jobforukrainians,core,40
 space_job,core,40
 wwjobs,core,40
-dou_remote,core,40
+dou_remote,reference,40
 foranalysts,secondary,40
 data_engineer_jobs,secondary,40
 remote_ai_jobs,secondary,40
