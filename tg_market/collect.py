@@ -87,7 +87,7 @@ def append_csv(path: Path, fields: list[str], rows: list[dict]) -> None:
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--since", required=True, help="YYYY-MM-DD, найраніша дата постів")
-    ap.add_argument("--panel", default="core", choices=["core", "secondary", "all"])
+    ap.add_argument("--panel", default="core", choices=["core", "secondary", "reference", "all"])
     ap.add_argument("--channel", help="лише один канал (для перевірки)")
     ap.add_argument("--dry-run", action="store_true", help="лише зібрати й порахувати пости, без Claude і без запису")
     args = ap.parse_args()
