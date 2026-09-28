@@ -105,7 +105,7 @@ def _aggregate(cluster: list[dict]) -> dict:
 # Креативний дизайн (графіка, моушн, арт-дирекція, SMM-візуал) — маркетинг, не IT;
 # UI/UX, product, web, game design лишаються в IT/design.
 _CREATIVE = re.compile(r"graphic|графічн|motion|моушн|art ?director|арт-директор|smm|video editor|storyboard|"
-                       r"2d artist|3d designer|creative designer|marketing design|brand designer", re.I)
+                       r"2d artist|3d designer|creative designer|marketing design|brand designer|монтаж|creative lead", re.I)
 _KEEP_DESIGN = re.compile(r"ui|ux|product designer|web designer|game designer", re.I)
 # «Аналітик» у НГО/безпековому секторі — не аналітика даних.
 _NON_DATA_ANALYST = re.compile(r"meal|monitoring, (evaluation|reporting)|osint|національна безпека|розслідувач", re.I)
