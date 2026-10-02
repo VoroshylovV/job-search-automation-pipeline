@@ -1,7 +1,10 @@
 """Крок 1 — нові вакансії.
 
-Оркеструє: скрапінг 5 джерел -> Claude-оцінка (критерії/Match-рівень/
-ветерани/локація/дата) -> дедуплікація (детерміновано, в Python; дворівнева
+Оркеструє: скрапінг 5 джерел (з фільтрами remote/досвід у запиті) ->
+детермінований стоп за рівнем у назві -> етап 1: Claude по картці (грубе
+сито) -> етап 2: повний текст вакансії + вирішальна оцінка Claude
+(критерії/Match-рівень/ветерани/локація/дата; формат має бути явно
+підтверджений текстом) -> дедуплікація (детерміновано, в Python; дворівнева
 страховка — див. нижче) -> сортування за Match-рівнем -> оновлення лога
 показаних вакансій.
 
@@ -32,22 +35,26 @@ from claude_orchestrator.prompts import build_vacancy_eval_prompt
 from config import (
     CANDIDATE_LOCAL_TZ,
     CLAUDE_EVAL_CHUNK_SIZE,
+    CLAUDE_FULL_EVAL_CHUNK_SIZE,
     DATE_WINDOW_DAYS,
     DEDUP_LOG_MAX_AGE_DAYS,
     DEDUP_LOG_TITLE,
     RESUME_FOLDER_ID,
     TRACKER_SHEET_TITLE,
     TRACKER_URL_COLUMN_HEADER,
+    SENIORITY_STOP_PATTERN,
     UNKNOWN_DATE_FALLBACK_LIMIT,
 )
 from google_services import docs, drive, sheets
 from models import RawJobPosting, ScoredVacancy, SourceStatus
 from scrapers import SCRAPER_MODULES
 from scrapers.base import ScraperError
+from scrapers.detail import fetch_full_text
 
 logger = logging.getLogger(__name__)
 
 MATCH_ORDER = {"High": 0, "Medium": 1, "Low": 2}
+_SENIORITY_RE = re.compile(SENIORITY_STOP_PATTERN, re.IGNORECASE)
 
 
 @dataclass
@@ -189,12 +196,49 @@ def _decision(job: RawJobPosting, result: str, code: str, detail: str = "",
     }
 
 
-def _date_source(job: RawJobPosting, ev: dict | None) -> str:
+def _date_source(job: RawJobPosting, ev: dict | None, full_text: bool = False) -> str:
+    """Коди — спільні з онлайн-версією: «сторінка» (повна сторінка вакансії),
+    «картка» (список видачі), «невідома»."""
+    if ev and ev.get("posted_date") and not ev.get("date_undetermined"):
+        return "сторінка" if full_text else "картка"
     if job.posted_raw:
         return "картка"
-    if ev and ev.get("posted_date") and not ev.get("date_undetermined"):
-        return "опис"
     return "невідома"
+
+
+def _evaluate(jobs: list[RawJobPosting], today: date, stage: str,
+              full_texts: dict[int, str] | None = None) -> dict[int, dict]:
+    """Оцінка Claude порціями. Повертає {індекс у jobs: evaluation}."""
+    chunk_size = CLAUDE_FULL_EVAL_CHUNK_SIZE if stage == "full" else CLAUDE_EVAL_CHUNK_SIZE
+    full_texts = full_texts or {}
+    result: dict[int, dict] = {}
+    for start in range(0, len(jobs), chunk_size):
+        chunk = jobs[start : start + chunk_size]
+        chunk_texts = {i - start: t for i, t in full_texts.items() if start <= i < start + len(chunk)}
+        prompt = build_vacancy_eval_prompt(chunk, today=today, stage=stage, full_texts=chunk_texts)
+        for ev in call_json(prompt).get("evaluations", []):
+            idx = ev.get("raw_index")
+            if isinstance(idx, int) and 0 <= idx < len(chunk):
+                result[idx + start] = ev
+    return result
+
+
+def _confirm_with_full_text(jobs: list[RawJobPosting], today: date,
+                            stage1_evals: list[dict] | None = None) -> tuple[dict[int, dict], set[int]]:
+    """Етап 2: повний текст кожної вакансії, що пройшла картку, і
+    вирішальна оцінка за ним. Повертає ({індекс: evaluation}, множина
+    індексів, для яких повний текст справді отримано). stage1_evals —
+    оцінки етапу 1 у тому самому порядку (тут не використовуються; потрібні
+    тестам, які підміняють етап 2 «прозорим» без мережі)."""
+    full_texts: dict[int, str] = {}
+    for i, job in enumerate(jobs):
+        text = fetch_full_text(job)
+        if text:
+            full_texts[i] = text
+    logger.info("Етап 2: повний текст отримано для %d з %d вакансій", len(full_texts), len(jobs))
+    if not jobs:
+        return {}, set()
+    return _evaluate(jobs, today, "full", full_texts), set(full_texts)
 
 
 def run_step1(utc_today: date | None = None, local_today: date | None = None) -> dict:
@@ -275,16 +319,36 @@ def run_step1(utc_today: date | None = None, local_today: date | None = None) ->
     # Claude оцінює лише те, що не відфільтровано вище, одним викликом на
     # шматок (config.CLAUDE_EVAL_CHUNK_SIZE) — за потреби зменш його там,
     # якщо контекст завеликий.
-    evaluations: list[dict] = []
-    for start in range(0, len(jobs_to_evaluate), CLAUDE_EVAL_CHUNK_SIZE):
-        chunk = jobs_to_evaluate[start : start + CLAUDE_EVAL_CHUNK_SIZE]
-        prompt = build_vacancy_eval_prompt(chunk, today=local_today)
-        result = call_json(prompt)
-        for ev in result.get("evaluations", []):
-            ev["raw_index"] += start  # зсув індексів під jobs_to_evaluate
-        evaluations.extend(result.get("evaluations", []))
+    # Етап 0 (детерміновано, без Claude): явний рівень вище Junior у назві
+    # і вакансії без URL (у звіті вакансія без посилання невалідна — Правило
+    # В онлайн-промпту від 02.10.2026).
+    remaining: list[RawJobPosting] = []
+    for j in jobs_to_evaluate:
+        m = _SENIORITY_RE.search(j.title or "")
+        if m:
+            decisions.append(_decision(j, "відсіяно", "досвід", f"рівень у назві: {m.group(0)}", date_source=_date_source(j, None)))
+        elif not j.url:
+            decisions.append(_decision(j, "відсіяно", "інше", "немає URL вакансії", date_source=_date_source(j, None)))
+        else:
+            remaining.append(j)
+    jobs_to_evaluate = remaining
 
-    eval_by_index = {ev["raw_index"]: ev for ev in evaluations}
+    # Етап 1: картка (грубе сито). Етап 2: повний текст — вирішальний.
+    eval_by_index = _evaluate(jobs_to_evaluate, local_today, "card")
+    stage1_passed = [i for i in range(len(jobs_to_evaluate))
+                     if eval_by_index.get(i) and eval_by_index[i].get("passes_criteria")]
+    stage2_evals, full_text_ok = _confirm_with_full_text(
+        [jobs_to_evaluate[i] for i in stage1_passed], local_today,
+        [eval_by_index[i] for i in stage1_passed],
+    )
+    full_text_indices: set[int] = set()
+    for k, i in enumerate(stage1_passed):
+        ev2 = stage2_evals.get(k)
+        if ev2 is None:
+            ev2 = {"passes_criteria": False, "reject_code": "інше", "reject_reason": "етап 2 без оцінки"}
+        eval_by_index[i] = ev2
+        if k in full_text_ok:
+            full_text_indices.add(i)
 
     scored: list[ScoredVacancy] = []
     # Дату не завжди вдається розпізнати (ні скрапер, ні Claude не витягли
@@ -303,7 +367,7 @@ def run_step1(utc_today: date | None = None, local_today: date | None = None) ->
         if not ev.get("passes_criteria"):
             decisions.append(_decision(
                 job, "відсіяно", ev.get("reject_code") or "інше", ev.get("reject_reason") or "",
-                ev.get("posted_date"), _date_source(job, ev),
+                ev.get("posted_date"), _date_source(job, ev, i in full_text_indices),
             ))
             continue
 
@@ -316,7 +380,7 @@ def run_step1(utc_today: date | None = None, local_today: date | None = None) ->
                 date_undetermined = True
                 parsed = None
             if parsed and parsed not in (local_today, local_yesterday):
-                decisions.append(_decision(job, "відсіяно", "дата", "поза вікном сьогодні/вчора", posted_date, _date_source(job, ev)))
+                decisions.append(_decision(job, "відсіяно", "дата", "поза вікном сьогодні/вчора", posted_date, _date_source(job, ev, i in full_text_indices)))
                 continue  # поза вікном "останні 2 дні" (місцевий час кандидата) — не показуємо
 
         if date_undetermined:
@@ -342,18 +406,19 @@ def run_step1(utc_today: date | None = None, local_today: date | None = None) ->
 
         if dedup_level_used == 1:
             if _is_duplicate(vacancy.dedup_key(), log_entries):
-                decisions.append(_decision(job, "відсіяно", "дубль", "після оцінки", posted_date, _date_source(job, ev)))
+                decisions.append(_decision(job, "відсіяно", "дубль", "після оцінки", posted_date, _date_source(job, ev, i in full_text_indices)))
                 continue
         elif dedup_level_used == 2:
             if vacancy.url and vacancy.url in (tracker_urls or set()):
-                decisions.append(_decision(job, "відсіяно", "подано", "рівень 2", posted_date, _date_source(job, ev)))
+                decisions.append(_decision(job, "відсіяно", "подано", "рівень 2", posted_date, _date_source(job, ev, i in full_text_indices)))
                 continue
         # dedup_level_used == 0: обидва рівні недоступні — показуємо без дедублікації.
 
         scored.append(vacancy)
         decisions.append(_decision(
-            job, "показано", "—", vacancy.match_level,
-            posted_date, "невідома" if date_undetermined else _date_source(job, ev),
+            job, "показано", "—",
+            f"{vacancy.match_level} · {'сторінка' if i in full_text_indices else 'лише картка'}",
+            posted_date, "невідома" if date_undetermined else _date_source(job, ev, i in full_text_indices),
         ))
 
     scored.sort(key=lambda v: MATCH_ORDER.get(v.match_level, 3))

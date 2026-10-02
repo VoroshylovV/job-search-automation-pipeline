@@ -34,9 +34,15 @@ BASE_URL = "https://djinni.co"
 # Статичні keyword-сторінки Djinni — стабільніші за пошук з query-параметрами
 # (перевірено: exp_level у query string не завжди застосовується без сесії
 # браузера, тоді як keyword-URL повертає релевантну стрічку одразу).
+# Фільтри на рівні запиту (додано 02.10.2026): лише remote і досвід
+# "без досвіду"/"1 рік". До цього бралась уся стрічка за ключовим словом,
+# і офісні/Senior-вакансії потрапляли на оцінку, а картка списку не
+# містила достатньо тексту, щоб їх відсіяти. Перевірено 02.10.2026: на
+# keyword-data_analyst фільтр звужує видачу до ~9 вакансій.
+LISTING_FILTER = "?employment=remote&exp_level=no_exp&exp_level=1y"
 LISTING_URLS = [
-    f"{BASE_URL}/jobs/keyword-data_analyst/",
-    f"{BASE_URL}/jobs/keyword-product_analyst/",
+    f"{BASE_URL}/jobs/keyword-data_analyst/{LISTING_FILTER}",
+    f"{BASE_URL}/jobs/keyword-product_analyst/{LISTING_FILTER}",
 ]
 
 # Job-картки на Djinni ідентифікуються стабільним патерном URL: /jobs/<id>-<slug>/

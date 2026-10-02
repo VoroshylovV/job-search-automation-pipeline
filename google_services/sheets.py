@@ -59,6 +59,35 @@ def append_row(spreadsheet_id: str, row: list) -> None:
     ).execute()
 
 
+def upsert_row_by_first_cell(spreadsheet_id: str, row: list) -> str:
+    """Рядок з тим самим значенням першої клітинки (дата запуску) уже є —
+    оновити його на місці; інакше додати новий. Повертає "updated"/"appended".
+
+    Правило Г онлайн-промпту від 02.10.2026: рядок метрики за ту саму дату
+    не дублюється при повторному прогоні того ж дня — виправляється наявний.
+    Для «Результату щоденної перевірки» (аудит-лог) це НЕ застосовується —
+    там кожен запуск окремим рядком (append_row)."""
+    guard_not_forbidden(spreadsheet_id)
+    key = str(row[0]) if row else ""
+    rows = read_values(spreadsheet_id, "A1:A")
+    match_idx = None
+    for idx, r in enumerate(rows):
+        if idx == 0:
+            continue  # заголовок
+        if r and r[0].strip() == key:
+            match_idx = idx
+    if match_idx is None:
+        append_row(spreadsheet_id, row)
+        return "appended"
+    sheet_row = match_idx + 1
+    rng = f"A{sheet_row}:{_col_letter(len(row))}{sheet_row}"
+    sheets_service().spreadsheets().values().update(
+        spreadsheetId=spreadsheet_id, range=rng, valueInputOption="USER_ENTERED",
+        body={"values": [row]},
+    ).execute()
+    return "updated"
+
+
 def read_values(spreadsheet_id: str, range_: str = "A1:ZZ") -> list[list[str]]:
     """Читання БЕЗ guard_not_forbidden — читати "Мої відгуки на вакансію.xlsx"
     заборони немає, заборонено лише писати в неї (drive.guard_not_forbidden

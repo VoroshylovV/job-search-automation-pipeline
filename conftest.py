@@ -20,3 +20,16 @@ def _no_real_tracker_read(monkeypatch):
     from pipeline import step1_vacancies
 
     monkeypatch.setattr(step1_vacancies, "_applied_urls", lambda: set())
+
+
+@pytest.fixture(autouse=True)
+def _transparent_stage2(monkeypatch):
+    """Етап 2 (повний текст) ходить у мережу. У тестах логіки Кроку 1 він
+    «прозорий»: повертає оцінки етапу 1 без змін. Тести самого етапу 2
+    (tests/test_step1_fulltext.py) знімають цю підміну явно."""
+    from pipeline import step1_vacancies
+
+    def _passthrough(jobs, today, stage1_evals=None):
+        return {k: ev for k, ev in enumerate(stage1_evals or [])}, set()
+
+    monkeypatch.setattr(step1_vacancies, "_confirm_with_full_text", _passthrough)

@@ -44,7 +44,7 @@ def _run(projects, evals, *, dedup=(None, "")):
          patch.object(step1_2, "_read_dedup_log_with_retry", lambda: dedup), \
          patch.object(step1_2, "_get_or_create_metrics_sheet", lambda: "sheet123"), \
          patch("google_services.sheets.ensure_header", lambda *a, **k: None), \
-         patch("google_services.sheets.append_row", lambda *a, **k: None), \
+         patch("google_services.sheets.upsert_row_by_first_cell", lambda *a, **k: "appended"), \
          patch("google_services.sheets.read_last_data_rows", lambda *a, **k: []), \
          patch("google_services.docs.replace_full_text", lambda *a, **k: None):
         return step1_2.run_step1_2(utc_today=date(2026, 9, 24), local_today=date(2026, 9, 24))
@@ -117,7 +117,7 @@ def test_known_url_skips_claude_call_entirely():
          patch.object(step1_2, "_read_dedup_log_with_retry", lambda: ("doc1", log_text)), \
          patch.object(step1_2, "_get_or_create_metrics_sheet", lambda: "sheet123"), \
          patch("google_services.sheets.ensure_header", lambda *a, **k: None), \
-         patch("google_services.sheets.append_row", lambda *a, **k: None), \
+         patch("google_services.sheets.upsert_row_by_first_cell", lambda *a, **k: "appended"), \
          patch("google_services.sheets.read_last_data_rows", lambda *a, **k: []), \
          patch("google_services.docs.replace_full_text", lambda *a, **k: None):
         result = step1_2.run_step1_2(utc_today=date(2026, 9, 24), local_today=date(2026, 9, 24))

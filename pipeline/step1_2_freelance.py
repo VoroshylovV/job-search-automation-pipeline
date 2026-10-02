@@ -353,7 +353,7 @@ def run_step1_2(utc_today: date | None = None, local_today: date | None = None) 
             status_telegram=status_telegram,
             streak_zero_telegram=streak_tg,
         )
-        sheets.append_row(sheet_id, metrics.as_row())
+        sheets.upsert_row_by_first_cell(sheet_id, metrics.as_row())
         metrics_saved = True
     except Exception as exc:  # noqa: BLE001
         logger.exception("Не вдалось зберегти метрику фрілансу")

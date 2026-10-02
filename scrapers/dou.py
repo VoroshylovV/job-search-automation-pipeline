@@ -22,7 +22,14 @@ LISTING_URL = f"{BASE_URL}/vacancies/"
 # DOU дозволяє фільтр за категорією; "Analyst" — найближча вбудована категорія
 # до Data/Product Analyst. Точний семантичний фільтр (роль/досвід) робить
 # Claude на зібраних картках, це просто звужує вибірку на вході.
-PARAMS = {"category": "Analyst"}
+# Фільтри на рівні запиту (додано 02.10.2026): remote + досвід "<1 року" і
+# "1-3 роки" (діапазон 1-3 лишається, бо критерій пропускає нижню межу
+# ≤1.5 року з капом Match на Medium; фіксовані 2+ роки відсіє повна сторінка).
+# Параметр `remote` на DOU — прапорець без значення (?remote), тому значення "".
+PARAMS_LIST = [
+    {"category": "Analyst", "remote": "", "exp": "0-1"},
+    {"category": "Analyst", "remote": "", "exp": "1-3"},
+]
 
 # Посилання на вакансію завжди виду /companies/<company-slug>/vacancies/<id>/
 JOB_LINK_RE = re.compile(r"^/companies/[\w-]+/vacancies/\d+/?$")
@@ -59,24 +66,30 @@ def _parse_card(card) -> RawJobPosting | None:
 
 def scrape() -> Iterator[RawJobPosting]:
     session = get_session()
-    try:
-        resp = fetch(session, LISTING_URL, params=PARAMS)
-    except ScraperError as exc:
-        raise ScraperError(f"jobs.dou.ua: {exc}") from exc
-
-    soup = BeautifulSoup(resp.text, "html.parser")
     seen: set[str] = set()
-    # li.l-vacancy — типовий контейнер картки на DOU; якщо розмітка зміниться,
-    # fallback йде через прямий пошук посилань за JOB_LINK_RE.
-    cards = soup.select("li.l-vacancy") or [
-        a.find_parent(["li", "div"]) or a for a in soup.find_all("a", href=JOB_LINK_RE)
-    ]
-    for card in cards:
-        job = _parse_card(card)
-        if job is None or job.url in seen:
+    any_success = False
+    last_error: Exception | None = None
+    for params in PARAMS_LIST:
+        try:
+            resp = fetch(session, LISTING_URL, params=params)
+        except ScraperError as exc:
+            last_error = exc
             continue
-        seen.add(job.url)
-        yield job
+        any_success = True
+        soup = BeautifulSoup(resp.text, "html.parser")
+        # li.l-vacancy — типовий контейнер картки на DOU; якщо розмітка зміниться,
+        # fallback йде через прямий пошук посилань за JOB_LINK_RE.
+        cards = soup.select("li.l-vacancy") or [
+            a.find_parent(["li", "div"]) or a for a in soup.find_all("a", href=JOB_LINK_RE)
+        ]
+        for card in cards:
+            job = _parse_card(card)
+            if job is None or job.url in seen:
+                continue
+            seen.add(job.url)
+            yield job
+    if not any_success:
+        raise ScraperError(f"jobs.dou.ua: усі запити провалились ({last_error})")
 
 
 if __name__ == "__main__":

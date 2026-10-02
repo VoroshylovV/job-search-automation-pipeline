@@ -56,7 +56,7 @@ def run_step3(
     try:
         sheet_id = _get_or_create_metrics_sheet()
         sheets.ensure_header(sheet_id)
-        sheets.append_row(sheet_id, metrics.as_row())
+        sheets.upsert_row_by_first_cell(sheet_id, metrics.as_row())
         return {"metrics": metrics, "saved": True}
     except Exception as exc:  # noqa: BLE001
         logger.exception("Не вдалось зберегти метрику")

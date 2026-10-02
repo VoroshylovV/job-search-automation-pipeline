@@ -38,6 +38,11 @@ LISTING_URLS = [
 # Публічне API пошуку вакансій, з якого бере дані сам сайт.
 ROBOTA_API_URL = "https://api.robota.ua/vacancy/search"
 API_KEYWORDS = ["data analyst", "product analyst"]
+# scheduleId=3 — "Віддалена робота" (додано 02.10.2026; перевірено: для
+# "data analyst" звужує видачу API зі 127 до 35). robota.ua позначає так і
+# гібрид "з можливістю віддаленої", тому остаточне рішення про формат
+# приймається за повним описом вакансії (scrapers/detail.py).
+API_REMOTE_SCHEDULE_ID = 3
 
 # Посилання на вакансію: /companyXXXXX/vacancyXXXXXXXX
 JOB_LINK_RE = re.compile(r"/company\d+/vacancy\d+")
@@ -121,7 +126,7 @@ def _scrape_api(session) -> list[RawJobPosting]:
     last_error: Exception | None = None
     for kw in API_KEYWORDS:
         try:
-            payload = fetch(session, ROBOTA_API_URL, params={"keyWords": kw}).json()
+            payload = fetch(session, ROBOTA_API_URL, params={"keyWords": kw, "scheduleId": API_REMOTE_SCHEDULE_ID}).json()
         except (ScraperError, ValueError) as exc:
             last_error = exc
             continue

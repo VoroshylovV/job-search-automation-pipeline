@@ -118,8 +118,49 @@ date_undetermined=true (це не означає відхилення — про
 порядку/кількості."""
 
 
-def build_vacancy_eval_prompt(raw_jobs: list[RawJobPosting], today: date | None = None) -> str:
+# Двоетапна оцінка (додано 02.10.2026, спільні правила з онлайн-версією —
+# див. docs/ALIGNMENT.md). Етап "card" — грубе сито по картці видачі;
+# етап "full" — вирішальна перевірка по повному тексту вакансії. Без цього
+# розподілу картка без згадки формату/досвіду "мовчки" проходила, і в звіт
+# потрапляли офісні вакансії та вакансії з вимогою 2+ роки.
+VACANCY_STAGE_CARD = """ЕТАП 1 з 2 — картка зі списку видачі. Тобі дано лише коротку картку \
+(description_snippet), а не повний текст вакансії. Відсіюй (passes_criteria=false) \
+ЛИШЕ коли картка ЯВНО суперечить критерію: прямо названо офіс/гібрид без \
+варіанту remote, досвід 2+ роки, рівень Middle/Senior/Lead/Head, роль не \
+аналітика даних/продукту, англійська C1+, ЗП нижче порогу. Якщо інформації \
+бракує — passes_criteria=true: вакансію буде перевірено на етапі 2 за \
+повним текстом. match_level на цьому етапі попередній."""
+
+VACANCY_STAGE_FULL = """ЕТАП 2 з 2 — ВИРІШАЛЬНИЙ. description_snippet — повний текст вакансії \
+(якщо full_text_available=false — повний текст отримати не вдалося, і це лише \
+картка). Діють правила ПІДТВЕРДЖЕННЯ (мають пріоритет над загальними вище):
+- Формат: passes_criteria=true лише якщо текст ЯВНО дозволяє працювати \
+повністю віддалено (remote / віддалено / дистанційно, зокрема «гібрид або \
+віддалено» як вибір працівника). Лише офіс, гібрид з обов'язковими днями в \
+офісі, релокація — reject_code "формат". Формат не згадано взагалі — теж \
+reject_code "формат", reject_reason "формат не підтверджено". Сама лише назва \
+міста (наприклад «Київ») НЕ є підтвердженням remote.
+- Досвід: якщо вимога не вказана взагалі — це допустимо (критерій «без \
+вказаного рівня»). Якщо вказана — застосовуй правила досвіду вище. Рівень \
+Middle/Senior/Lead/Head/Principal у назві або тексті — reject_code "досвід".
+- Роль: аналітика даних/продукту як основна робота. Аналітик-керівник, \
+менеджер, розробник, бізнес-/системний аналітик без роботи з даними — "роль".
+- Дата публікації: шукай у тексті (поле дати, «N днів тому», дата в описі).
+Не вигадуй відсутніх фактів: чого немає в тексті — того немає."""
+
+
+def build_vacancy_eval_prompt(
+    raw_jobs: list[RawJobPosting],
+    today: date | None = None,
+    stage: str = "card",
+    full_texts: dict[int, str] | None = None,
+) -> str:
+    """stage="card" — етап 1 (картка), stage="full" — етап 2 (повний текст).
+    full_texts: {індекс у raw_jobs: повний текст} для етапу 2; для вакансій
+    без повного тексту передається картка з full_text_available=false."""
     today = today or date.today()
+    full_texts = full_texts or {}
+    stage_block = VACANCY_STAGE_FULL if stage == "full" else VACANCY_STAGE_CARD
     payload = [
         {
             "raw_index": i,
@@ -129,7 +170,8 @@ def build_vacancy_eval_prompt(raw_jobs: list[RawJobPosting], today: date | None 
             "url": job.url,
             "posted_raw": job.posted_raw,
             "salary_raw": job.salary_raw,
-            "description_snippet": job.description_snippet,
+            "description_snippet": full_texts.get(i, job.description_snippet),
+            **({"full_text_available": i in full_texts} if stage == "full" else {}),
         }
         for i, job in enumerate(raw_jobs)
     ]
@@ -137,7 +179,7 @@ def build_vacancy_eval_prompt(raw_jobs: list[RawJobPosting], today: date | None 
     # build_email_classify_prompt) — без плейсхолдера всередині константи
     # VACANCY_EVAL_SYSTEM_PROMPT, щоб не тримати f-string-екранування
     # ({{ }}) і .replace() як дві паралельні механіки для того самого.
-    return VACANCY_EVAL_SYSTEM_PROMPT + "\n\nСьогоднішня дата: " + today.isoformat() + "\n\nВакансії:\n" + json.dumps(
+    return VACANCY_EVAL_SYSTEM_PROMPT + "\n\n" + stage_block + "\n\nСьогоднішня дата: " + today.isoformat() + "\n\nВакансії:\n" + json.dumps(
         payload, ensure_ascii=False, indent=2
     )
 
