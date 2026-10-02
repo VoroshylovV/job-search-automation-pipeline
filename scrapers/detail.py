@@ -40,13 +40,37 @@ _MAIN_SELECTORS = {
     "jobs.dou.ua": ["div.l-vacancy", "div.b-vacancy"],
     "work.ua": ["div#job-description", "div.card.wordwrap"],
     "djinni.co": ["main", "div.job-post-page"],
-    "happymonday.ua": ["main", "article"],
+    # happymonday.ua: перевірка 02.10.2026 показала, що "main"/"article"
+    # повертають усю сторінку з шапкою сайту («Work with Ukraine…», «Останнє
+    # оновлення…»), а опис вакансії обрізався лімітом 6000 символів. Тому
+    # для нього — лише евристика від заголовка вакансії (_from_title_block).
+    "happymonday.ua": [],
 }
+# Джерела, де текст ріжеться від заголовка вакансії (h1), а не від початку.
+_TITLE_ANCHORED_SOURCES = {"happymonday.ua"}
+_MIN_BLOCK_CHARS = 800
 _NOISE_TAGS = ["script", "style", "noscript", "nav", "header", "footer", "form", "svg", "iframe"]
 
 
 def _clean(text: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
+
+
+def _from_title_block(soup) -> str | None:
+    """Найменший предок заголовка вакансії (h1), що містить ≥_MIN_BLOCK_CHARS
+    символів тексту, і текст, обрізаний так, щоб починався з самого
+    заголовка — шапка сайту й меню до нього відкидаються."""
+    h1 = soup.find("h1")
+    if h1 is None:
+        return None
+    title = _clean(h1.get_text(" ", strip=True))
+    node = h1
+    while node.parent is not None and len(node.get_text(strip=True)) < _MIN_BLOCK_CHARS:
+        node = node.parent
+    text = _clean(node.get_text(" ", strip=True))
+    if title and title in text:
+        text = text[text.index(title):]
+    return text if len(text) > 200 else None
 
 
 def _html_to_text(html: str, source: str) -> str:
@@ -57,6 +81,10 @@ def _html_to_text(html: str, source: str) -> str:
         node = soup.select_one(selector)
         if node is not None and len(node.get_text(strip=True)) > 200:
             return _clean(node.get_text(" ", strip=True))
+    if source in _TITLE_ANCHORED_SOURCES:
+        block = _from_title_block(soup)
+        if block:
+            return block
     body = soup.body or soup
     return _clean(body.get_text(" ", strip=True))
 

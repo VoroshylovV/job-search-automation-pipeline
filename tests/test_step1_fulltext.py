@@ -141,3 +141,12 @@ def test_upsert_updates_same_date_row():
          patch.object(sheets, "append_row", lambda *a: pytest.fail("не мало бути append")):
         assert sheets.upsert_row_by_first_cell("sid", ["2026-10-02", 5, 1]) == "updated"
     assert updated["range"] == "A3:C3"
+
+
+def test_happymonday_text_starts_at_vacancy_title():
+    banner = "Work with Ukraine обʼєднує українських фахівців закордоном. Останнє оновлення. " * 5
+    body = "Обов'язки: SQL-звіти, дашборди. Формат: віддалено. " * 30
+    html = f"<html><body><div>{banner}</div><div class='v'><h1>Аналітик даних</h1><p>{body}</p></div></body></html>"
+    text = detail._html_to_text(html, "happymonday.ua")
+    assert text.startswith("Аналітик даних")
+    assert "Work with Ukraine" not in text and "віддалено" in text
