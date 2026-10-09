@@ -39,6 +39,10 @@ class ScoredVacancy:
     low_match_location_reason: str
     posted_date: Optional[str]  # ISO-дата, або None якщо невизначена
     date_undetermined: bool
+    # Прапорець «Компанія вже в таблиці: <статус>» (компанія є в таблиці
+    # відгуків під іншою посадою/URL) — вакансія показується, не відсіюється.
+    company_flag: str = ""
+    card_only: bool = False  # повну сторінку не отримано — Match не вище Medium
 
     def dedup_key(self) -> str:
         if self.url:

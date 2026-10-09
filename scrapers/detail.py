@@ -122,7 +122,9 @@ def fetch_full_text(job: RawJobPosting) -> str | None:
         else:
             text = _html_to_text(fetch(session, job.url).text, job.source)
     except (ScraperError, ValueError) as exc:
-        logger.warning("Повний текст %s недоступний: %s", job.url, exc)
+        # Текст помилки може містити сире API-посилання robota.ua — у лог не йде.
+        detail = "помилка API" if job.source == "robota.ua" else exc
+        logger.warning("Повний текст %s недоступний: %s", job.url, detail)
         return None
     except Exception as exc:  # noqa: BLE001 - різні HTTP-бекенди мають різні помилки
         logger.warning("Повний текст %s: неочікувана помилка %s", job.url, exc)

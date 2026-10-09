@@ -95,18 +95,28 @@ def format_report(
             if v.low_match_location:
                 loc += f" ({v.low_match_location_reason})"
             lines.append(f"  - Low match через локацію: {loc}")
+            if v.company_flag:
+                lines.append(f"  - Прапорець: {v.company_flag}")
+            if v.card_only:
+                lines.append("  - Позначка: лише картка (Match не вище Medium)")
             date_str = "невизначена" if v.date_undetermined else (v.posted_date or "невизначена")
             lines.append(f"  - Дата публікації: {date_str}\n")
 
+    # Службові подробиці — окремим блоком «Примітки», не всередині списку.
+    notes: list[str] = []
     unavailable = [
         s.source for s in step1_result["source_statuses"].values() if s.status == "недоступне"
     ]
     if unavailable:
-        lines.append(f"⚠️ Недоступні джерела в цьому запуску: {', '.join(unavailable)}\n")
+        notes.append(f"Недоступні джерела в цьому запуску: {', '.join(unavailable)}")
     if step1_result.get("dedup_log_note"):
-        lines.append(f"⚠️ {step1_result['dedup_log_note']}\n")
+        notes.append(step1_result["dedup_log_note"])
     if step1_result.get("unknown_date_note"):
-        lines.append(f"⚠️ {step1_result['unknown_date_note']}\n")
+        notes.append(step1_result["unknown_date_note"])
+    if notes:
+        lines.append("**Примітки**")
+        lines.extend(f"- ⚠️ {n}" for n in notes)
+        lines.append("")
 
     lines.append("\n## Крок 1.2 — фріланс-проєкти\n")
     projects = step1_2_result.get("projects", [])

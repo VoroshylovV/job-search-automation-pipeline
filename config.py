@@ -99,6 +99,9 @@ TRACKER_SHEET_TITLE = "Ворошилов відгуки на вакансії"
 TRACKER_SHEET_NAME = "Interview"  # вкладка з відгуками
 TRACKER_URL_COLUMN_HEADER = "Посилання на вакансію"
 TRACKER_COMPANY_COLUMN_HEADER = "Компанія"
+# Припущення: колонка з назвою посади в таблиці відгуків. Якщо такого
+# заголовка немає — позиція порожня, і збіг компанії без URL трактується як дубль.
+TRACKER_POSITION_COLUMN_HEADER = "Посада"
 TRACKER_RESULT_COLUMN_HEADER = "Результат відгуку"
 TRACKER_NOTES_COLUMN_HEADER = "Примітки"
 

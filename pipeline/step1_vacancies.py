@@ -4,8 +4,8 @@
 детермінований стоп за рівнем у назві -> етап 1: Claude по картці (грубе
 сито) -> етап 2: повний текст вакансії + вирішальна оцінка Claude
 (критерії/Match-рівень/ветерани/локація/дата; формат має бути явно
-підтверджений текстом) -> дедуплікація (детерміновано, в Python; дворівнева
-страховка — див. нижче) -> сортування за Match-рівнем -> оновлення лога
+підтверджений текстом) -> дедуплікація (детерміновано, в Python; обидва рівні —
+лог показаних і таблиця відгуків — виконуються паралельно, за ID вакансії) -> сортування за Match-рівнем -> оновлення лога
 показаних вакансій.
 
 Підрахунок "скільки всього знайдено" / "скільки показано" тут НЕ лічильники
@@ -40,6 +40,9 @@ from config import (
     DEDUP_LOG_MAX_AGE_DAYS,
     DEDUP_LOG_TITLE,
     RESUME_FOLDER_ID,
+    TRACKER_COMPANY_COLUMN_HEADER,
+    TRACKER_POSITION_COLUMN_HEADER,
+    TRACKER_RESULT_COLUMN_HEADER,
     TRACKER_SHEET_TITLE,
     TRACKER_URL_COLUMN_HEADER,
     SENIORITY_STOP_PATTERN,
@@ -74,7 +77,7 @@ def _parse_dedup_log(text: str) -> list[DedupEntry]:
         # "|" (наприклад, у назві проєкту чи описі) — без обмеження split()
         # мовчки обрізав би label на першому зайвому "|", і для вакансій без
         # прямого URL (де dedup_key будується з повного "title|company")
-        # обрізаний label більше не збігався б при порівнянні в _is_duplicate.
+        # обрізаний label більше не збігався б при порівнянні в _is_duplicate_in_log.
         parts = [p.strip() for p in line.split("|", 2)]
         if len(parts) < 3:
             continue
@@ -93,13 +96,6 @@ def _get_or_create_dedup_doc() -> str:
         "Формат рядка: дата_показу (UTC) | URL_або_інший_ідентифікатор | назва посади — компанія.\n",
     )
     return doc_id
-
-
-def _is_duplicate(job_key: str, log_entries: list[DedupEntry]) -> bool:
-    for entry in log_entries:
-        if entry.identifier == job_key or entry.label.lower() == job_key.lower():
-            return True
-    return False
 
 
 def _read_dedup_log_with_retry() -> tuple[str | None, str | None]:
@@ -123,42 +119,119 @@ def _norm_url(url: str) -> str:
     return u.rstrip("/")
 
 
-def _applied_urls() -> set[str]:
-    """URL вакансій з таблиці відгуків (на них уже подано). Помилка читання
-    не валить Крок 1 — просто порожня множина з попередженням."""
+_ID_PATTERNS = [re.compile(p) for p in (r"vacancy(\d+)", r"[?&]id=(\d+)", r"/vacancies/(\d+)", r"/jobs/(\d+)")]
+
+
+def vacancy_key(url: str | None) -> str | None:
+    r"""Ключ дедублікації за ID вакансії, видобутим з URL (`vacancy\d+`,
+    `id=\d+`, `/vacancies/\d+`, `/jobs/\d+`) разом із доменом, а не за
+    збігом повного рядка URL. None, якщо ID видобути не вдається — тоді
+    звірка йде за парою «компанія + назва посади»."""
+    if not url:
+        return None
+    norm = _norm_url(url)
+    for pat in _ID_PATTERNS:
+        m = pat.search(norm)
+        if m:
+            domain = norm.split("/")[0].split("?")[0]
+            domain = ".".join(domain.split(".")[-2:])
+            return f"{domain}:{m.group(1)}"
+    return None
+
+
+def _same_vacancy_url(a: str | None, b: str | None) -> bool:
+    if not a or not b:
+        return False
+    ka, kb = vacancy_key(a), vacancy_key(b)
+    return (ka is not None and ka == kb) or _norm_url(a) == _norm_url(b)
+
+
+def _norm_name(text: str | None) -> str:
+    return re.sub(r"\s+", " ", (text or "").strip().lower())
+
+
+@dataclass
+class TrackerRow:
+    url: str
+    company: str
+    position: str
+    status: str
+
+
+def _read_tracker_rows() -> list[TrackerRow] | None:
+    """Рівень 2 дедублікації: рядки таблиці «Ворошилов відгуки на вакансії»
+    (URL, компанія, посада, результат). None — таблиця недоступна. Читається
+    ЗАВЖДИ, паралельно з логом показаних (Рівень 1), а не лише як фолбек."""
     try:
         tracker = drive.find_file_by_title(TRACKER_SHEET_TITLE, RESUME_FOLDER_ID)
         if not tracker:
-            return set()
-        return set(sheets.read_column_by_header(tracker["id"], TRACKER_URL_COLUMN_HEADER))
-    except Exception as exc:  # noqa: BLE001
-        logger.warning("Не вдалося прочитати URL з таблиці відгуків: %s", exc)
-        return set()
-
-
-def _level2_tracker_urls() -> tuple[set[str] | None, str]:
-    """Рівень 2 страховки: ЛИШЕ читання URL-колонки таблиці "Ворошилов
-    відгуки на вакансії". Повертає (None, note) якщо й ця таблиця
-    недоступна. НЕ звіряє за назвою компанії — див. коментар у config.py."""
-    tracker = drive.find_file_by_title(TRACKER_SHEET_TITLE, RESUME_FOLDER_ID)
-    if not tracker:
-        return None, (
-            "Обидва рівні дедублікації (лог і таблиця відгуків) виявились "
-            "недоступні в цьому запуску — показ вакансій без дедублікації."
-        )
-    try:
-        urls = sheets.read_column_by_header(tracker["id"], TRACKER_URL_COLUMN_HEADER)
-        return set(urls), (
-            "Лог дублів недоступний; дедублікацію виконано по колонці "
-            f"«{TRACKER_URL_COLUMN_HEADER}» таблиці відгуків (охоплює лише "
-            "вакансії, на які подано, — показані-але-не-подані могли пройти повторно)."
-        )
+            return None
+        rows = sheets.read_rows_by_headers(tracker["id"], [
+            TRACKER_URL_COLUMN_HEADER, TRACKER_COMPANY_COLUMN_HEADER,
+            TRACKER_POSITION_COLUMN_HEADER, TRACKER_RESULT_COLUMN_HEADER,
+        ])
+        return [
+            TrackerRow(
+                url=r.get(TRACKER_URL_COLUMN_HEADER, ""),
+                company=r.get(TRACKER_COMPANY_COLUMN_HEADER, ""),
+                position=r.get(TRACKER_POSITION_COLUMN_HEADER, ""),
+                status=r.get(TRACKER_RESULT_COLUMN_HEADER, ""),
+            )
+            for r in rows
+        ]
     except Exception as exc:  # noqa: BLE001
         logger.warning("Рівень 2 дедублікації (таблиця відгуків) недоступний: %s", exc)
-        return None, (
-            "Обидва рівні дедублікації (лог і таблиця відгуків) виявились "
-            f"недоступні в цьому запуску ({exc}) — показ вакансій без дедублікації."
-        )
+        return None
+
+
+def _is_duplicate_in_log(vacancy: ScoredVacancy, log_entries: list[DedupEntry]) -> bool:
+    key = vacancy_key(vacancy.url)
+    label = f"{vacancy.title} — {vacancy.company}".lower()
+    for entry in log_entries:
+        if _same_vacancy_url(vacancy.url, entry.identifier):
+            return True
+        if key is None and (entry.identifier == vacancy.dedup_key() or entry.label.lower() == label):
+            return True  # ID з URL не видобути — звірка за «компанія + назва»
+    return False
+
+
+def _tracker_check(vacancy: ScoredVacancy, rows: list[TrackerRow]) -> tuple[str, str]:
+    """('дубль', status) — вакансію вже подано; ('прапорець', status) — компанія
+    є в таблиці під іншою вакансією (показуємо з позначкою); ('', '') — ні."""
+    flag_status = None
+    company = _norm_name(vacancy.company)
+    for row in rows:
+        if _same_vacancy_url(vacancy.url, row.url):
+            return "дубль", row.status
+        if company and _norm_name(row.company) == company:
+            if not row.url.strip() or (row.position and _norm_name(row.position) == _norm_name(vacancy.title)):
+                return "дубль", row.status
+            flag_status = flag_status if flag_status is not None else row.status
+    if flag_status is not None:
+        return "прапорець", flag_status
+    return "", ""
+
+
+def _final_match_level(ev: dict, card_only: bool) -> str:
+    """Match-рівень за формулою A+B+C (по 0-2): High = 5-6 і A>0, B>0;
+    Medium = 3-4; Low = 0-2 або A=0 або B=0. Кап моделі (досвід >1.5 року ->
+    максимум Medium) лишається чинним: беремо гіршу з двох оцінок. Лише
+    картка (повної сторінки немає) — не вище Medium."""
+    model_level = ev.get("match_level") if ev.get("match_level") in MATCH_ORDER else None
+    scores = ev.get("match_scores")
+    level = model_level or "Low"
+    if isinstance(scores, dict):
+        try:
+            a, b, c = (int(scores[k]) for k in ("skills", "duties", "expectations"))
+        except (KeyError, TypeError, ValueError):
+            a = None
+        if a is not None and all(0 <= x <= 2 for x in (a, b, c)):
+            total = a + b + c
+            computed = "Low" if (a == 0 or b == 0 or total <= 2) else ("High" if total >= 5 else "Medium")
+            level = computed if model_level is None else max(computed, model_level, key=MATCH_ORDER.get)
+    if card_only and level == "High":
+        level = "Medium"
+    return level
 
 
 def _scrape_all(today: date) -> tuple[list[RawJobPosting], dict[str, SourceStatus], dict[str, str]]:
@@ -263,56 +336,51 @@ def run_step1(utc_today: date | None = None, local_today: date | None = None) ->
     if not raw_jobs:
         return empty_result
 
-    # --- Дедублікація: Рівень 1 (лог), з відкатом на Рівень 2 (таблиця
-    # відгуків) --- читається ДО оцінки Claude (не після, як раніше), щоб
-    # відомі за URL вакансії можна було відфільтрувати ще до платного
-    # виклику API — див. пре-фільтр нижче.
+    # --- Дедублікація: Рівень 1 (лог показаних) і Рівень 2 (таблиця
+    # відгуків) виконуються ОБОВ'ЯЗКОВО й ПАРАЛЕЛЬНО, незалежно один від
+    # одного (не лише як фолбек). Читаються ДО оцінки Claude, щоб відомі за
+    # ID вакансії відфільтрувати ще до платного виклику API.
     dedup_doc_id, log_text = _read_dedup_log_with_retry()
-    dedup_level_used = 0
-    dedup_log_note = ""
-    log_entries: list[DedupEntry] = []
-    tracker_urls: set[str] | None = None
-
+    tracker_rows = _read_tracker_rows()
+    log_entries: list[DedupEntry] = _parse_dedup_log(log_text) if log_text is not None else []
     if log_text is not None:
         dedup_level_used = 1
-        log_entries = _parse_dedup_log(log_text)
+        dedup_log_note = (
+            "" if tracker_rows is not None
+            else "Таблиця відгуків недоступна в цьому запуску — дедублікація лише за логом показаних."
+        )
+    elif tracker_rows is not None:
+        dedup_level_used = 2
+        dedup_log_note = (
+            "Лог дублів недоступний; дедублікацію виконано по таблиці відгуків "
+            "(охоплює лише вакансії, на які подано, — показані-але-не-подані могли пройти повторно)."
+        )
     else:
-        tracker_urls, dedup_log_note = _level2_tracker_urls()
-        dedup_level_used = 2 if tracker_urls is not None else 0
+        dedup_level_used = 0
+        dedup_log_note = (
+            "Обидва рівні дедублікації (лог і таблиця відгуків) виявились "
+            "недоступні в цьому запуску — показ вакансій без дедублікації."
+        )
 
-    # Пре-фільтр за URL ДО оцінки Claude: вакансія з відомим URL, який уже є
-    # в дедуп-джерелі, і так буде відкинута перевіркою нижче — немає сенсу
-    # платити за оцінку Claude наперед. НЕ замінює пост-оцінкову перевірку
-    # нижче (та лишається обов'язковою): для вакансій БЕЗ URL дедуп-ключ
-    # будується з НОРМАЛІЗОВАНИХ title/company, які повертає сам Claude,
-    # тобто відомі лише ПІСЛЯ оцінки — таких пре-фільтром не відсіяти.
-    known_urls: set[str] = set()
-    applied_norm: set[str] = set()
-    if dedup_level_used == 1:
-        known_urls = {e.identifier for e in log_entries}
-        # Вакансії, на які ВЖЕ подано (таблиця відгуків), виключаються
-        # завжди, а не лише коли лог недоступний: 25.09.2026 у звіт
-        # потрапили work.ua/jobs/7402564 і /8519788 — обидві вже в таблиці
-        # (Hay credito, Plamigo), але ще не в 21-денному лозі показаних.
-        applied = _applied_urls()
-        applied_norm = {_norm_url(u) for u in applied}
-        known_urls |= applied
-    elif dedup_level_used == 2:
-        known_urls = tracker_urls or set()
-    known_urls = {_norm_url(u) for u in known_urls}
+    # Пре-фільтр за ID вакансії ДО оцінки Claude. НЕ замінює пост-оцінкову
+    # перевірку нижче (та лишається обов'язковою): для вакансій БЕЗ ID/URL
+    # ключ будується з нормалізованих title/company, які повертає Claude.
+    log_urls = [e.identifier for e in log_entries]
+    applied_urls = [r.url for r in (tracker_rows or []) if r.url.strip()]
 
     decisions: list[dict] = []
     jobs_to_evaluate = []
     for j in raw_jobs:
-        if j.url and _norm_url(j.url) in known_urls:
-            code = "подано" if _norm_url(j.url) in applied_norm else "дубль"
-            decisions.append(_decision(j, "відсіяно", code, "відомий URL до оцінки", date_source=_date_source(j, None)))
+        applied = j.url and any(_same_vacancy_url(j.url, u) for u in applied_urls)
+        if j.url and (applied or any(_same_vacancy_url(j.url, u) for u in log_urls)):
+            code = "подано" if applied else "дубль"
+            decisions.append(_decision(j, "відсіяно", code, "відомий ID вакансії до оцінки", date_source=_date_source(j, None)))
         else:
             jobs_to_evaluate.append(j)
     skipped_known_url_count = len(raw_jobs) - len(jobs_to_evaluate)
     if skipped_known_url_count:
         logger.info(
-            "%d вакансій відфільтровано за відомим URL ДО оцінки Claude (економія викликів)",
+            "%d вакансій відфільтровано за відомим ID вакансії ДО оцінки Claude (економія викликів)",
             skipped_known_url_count,
         )
 
@@ -390,34 +458,39 @@ def run_step1(utc_today: date | None = None, local_today: date | None = None) ->
                 continue  # дата невідома, і ліміт показу таких вакансій за цей запуск вичерпано
             unknown_date_shown += 1
 
+        card_only = i not in full_text_indices
         vacancy = ScoredVacancy(
             title=ev.get("normalized_title") or job.title,
             company=ev.get("normalized_company") or job.company,
             source=job.source,
             url=job.url,
-            match_level=ev.get("match_level") or "Low",
+            match_level=_final_match_level(ev, card_only),
             match_reasoning=ev.get("match_reasoning") or "",
             veteran_bonus=bool(ev.get("veteran_bonus")),
             low_match_location=bool(ev.get("low_match_location")),
             low_match_location_reason=ev.get("low_match_location_reason") or "",
             posted_date=posted_date,
             date_undetermined=date_undetermined,
+            card_only=card_only,
         )
 
-        if dedup_level_used == 1:
-            if _is_duplicate(vacancy.dedup_key(), log_entries):
-                decisions.append(_decision(job, "відсіяно", "дубль", "після оцінки", posted_date, _date_source(job, ev, i in full_text_indices)))
+        # Обидва рівні — паралельно й незалежно (кожен, що доступний).
+        if log_text is not None and _is_duplicate_in_log(vacancy, log_entries):
+            decisions.append(_decision(job, "відсіяно", "дубль", "після оцінки", posted_date, _date_source(job, ev, i in full_text_indices)))
+            continue
+        if tracker_rows is not None:
+            verdict, status = _tracker_check(vacancy, tracker_rows)
+            if verdict == "дубль":
+                decisions.append(_decision(job, "відсіяно", "подано", "таблиця відгуків", posted_date, _date_source(job, ev, i in full_text_indices)))
                 continue
-        elif dedup_level_used == 2:
-            if vacancy.url and vacancy.url in (tracker_urls or set()):
-                decisions.append(_decision(job, "відсіяно", "подано", "рівень 2", posted_date, _date_source(job, ev, i in full_text_indices)))
-                continue
+            if verdict == "прапорець":
+                vacancy.company_flag = f"Компанія вже в таблиці: {status or 'без статусу'}"
         # dedup_level_used == 0: обидва рівні недоступні — показуємо без дедублікації.
 
         scored.append(vacancy)
         decisions.append(_decision(
             job, "показано", "—",
-            f"{vacancy.match_level} · {'сторінка' if i in full_text_indices else 'лише картка'}",
+            f"{vacancy.match_level} · {'лише картка' if card_only else 'сторінка'}",
             posted_date, "невідома" if date_undetermined else _date_source(job, ev, i in full_text_indices),
         ))
 
@@ -427,7 +500,7 @@ def run_step1(utc_today: date | None = None, local_today: date | None = None) ->
     # перезаписувати лог тим, чого не читали, ризиковано: могли б стерти
     # рядки, що просто не вдалось прочитати в ЦЬОМУ запуску).
     dedup_log_updated = False
-    if dedup_level_used == 1 and dedup_doc_id:
+    if log_text is not None and dedup_doc_id:
         try:
             cutoff = utc_today - timedelta(days=DEDUP_LOG_MAX_AGE_DAYS)
             kept_lines = []
