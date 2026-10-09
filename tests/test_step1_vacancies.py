@@ -284,21 +284,33 @@ def test_both_dedup_levels_run_in_parallel():
     assert result["decisions"][0]["code"] == "подано"
 
 
-def test_company_in_tracker_other_position_is_flagged():
+def test_company_in_tracker_other_vacancy_is_flagged():
     jobs = [_job(0)]
     evals = [_eval(0, posted_date="2026-10-09")]
-    tracker = [step1.TrackerRow("https://example.com/other", "Company 0", "Sales Manager", "Відмова")]
+    tracker = [step1.TrackerRow("https://work.ua/jobs/123", "Company 0", "01.10.2026", "Відмова")]
     result = _run_with(jobs, evals, tracker=tracker)
     assert len(result["vacancies"]) == 1
     assert result["vacancies"][0].company_flag == "Компанія вже в таблиці: Відмова"
 
 
-def test_company_in_tracker_empty_url_or_same_position_is_duplicate():
+def test_company_in_tracker_empty_url_is_duplicate():
     evals = [_eval(0, posted_date="2026-10-09")]
-    empty_url = [step1.TrackerRow("", "Company 0", "", "Подано")]
-    same_pos = [step1.TrackerRow("https://example.com/other", "Company 0", "Data Analyst 0", "Подано")]
-    assert _run_with([_job(0)], evals, tracker=empty_url)["vacancies"] == []
-    assert _run_with([_job(0)], evals, tracker=same_pos)["vacancies"] == []
+    tracker = [step1.TrackerRow("", "Company 0", "", "Подано")]
+    assert _run_with([_job(0)], evals, tracker=tracker)["vacancies"] == []
+
+
+def test_company_plus_date_is_duplicate_only_when_id_missing():
+    evals = [_eval(0, posted_date="2026-10-09")]
+    # у URL ні вакансії, ні таблиці ID немає -> компанія + дата
+    no_id = [step1.TrackerRow("https://example.com/about", "Company 0", "09.10.2026", "Подано")]
+    assert _run_with([_job(0)], evals, tracker=no_id)["vacancies"] == []
+    other_date = [step1.TrackerRow("https://example.com/about", "Company 0", "01.10.2026", "Подано")]
+    assert len(_run_with([_job(0)], evals, tracker=other_date)["vacancies"]) == 1
+    # обидва мають ID, вони різні -> дата не береться до уваги
+    job = RawJobPosting(source="work.ua", title="Data Analyst 0", company="Company 0", url="https://work.ua/jobs/5",
+                        posted_raw="", salary_raw="", description_snippet="")
+    with_id = [step1.TrackerRow("https://work.ua/jobs/6", "Company 0", "09.10.2026", "Подано")]
+    assert len(_run_with([job], evals, tracker=with_id)["vacancies"]) == 1
 
 
 def test_military_rejection_passes_through_with_code():

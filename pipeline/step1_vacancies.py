@@ -41,7 +41,7 @@ from config import (
     DEDUP_LOG_TITLE,
     RESUME_FOLDER_ID,
     TRACKER_COMPANY_COLUMN_HEADER,
-    TRACKER_POSITION_COLUMN_HEADER,
+    TRACKER_DATE_COLUMN_HEADER,
     TRACKER_RESULT_COLUMN_HEADER,
     TRACKER_SHEET_TITLE,
     TRACKER_URL_COLUMN_HEADER,
@@ -154,13 +154,13 @@ def _norm_name(text: str | None) -> str:
 class TrackerRow:
     url: str
     company: str
-    position: str
+    date: str
     status: str
 
 
 def _read_tracker_rows() -> list[TrackerRow] | None:
     """Рівень 2 дедублікації: рядки таблиці «Ворошилов відгуки на вакансії»
-    (URL, компанія, посада, результат). None — таблиця недоступна. Читається
+    (URL, компанія, дата відгуку, результат). None — таблиця недоступна. Читається
     ЗАВЖДИ, паралельно з логом показаних (Рівень 1), а не лише як фолбек."""
     try:
         tracker = drive.find_file_by_title(TRACKER_SHEET_TITLE, RESUME_FOLDER_ID)
@@ -168,13 +168,13 @@ def _read_tracker_rows() -> list[TrackerRow] | None:
             return None
         rows = sheets.read_rows_by_headers(tracker["id"], [
             TRACKER_URL_COLUMN_HEADER, TRACKER_COMPANY_COLUMN_HEADER,
-            TRACKER_POSITION_COLUMN_HEADER, TRACKER_RESULT_COLUMN_HEADER,
+            TRACKER_DATE_COLUMN_HEADER, TRACKER_RESULT_COLUMN_HEADER,
         ])
         return [
             TrackerRow(
                 url=r.get(TRACKER_URL_COLUMN_HEADER, ""),
                 company=r.get(TRACKER_COMPANY_COLUMN_HEADER, ""),
-                position=r.get(TRACKER_POSITION_COLUMN_HEADER, ""),
+                date=r.get(TRACKER_DATE_COLUMN_HEADER, ""),
                 status=r.get(TRACKER_RESULT_COLUMN_HEADER, ""),
             )
             for r in rows
@@ -195,16 +195,34 @@ def _is_duplicate_in_log(vacancy: ScoredVacancy, log_entries: list[DedupEntry]) 
     return False
 
 
+def _parse_date(text: str | None) -> date | None:
+    t = (text or "").strip()[:10]
+    for fmt in ("%Y-%m-%d", "%d.%m.%Y", "%d/%m/%Y", "%d.%m.%y"):
+        try:
+            return datetime.strptime(t, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
 def _tracker_check(vacancy: ScoredVacancy, rows: list[TrackerRow]) -> tuple[str, str]:
     """('дубль', status) — вакансію вже подано; ('прапорець', status) — компанія
-    є в таблиці під іншою вакансією (показуємо з позначкою); ('', '') — ні."""
+    є в таблиці під іншою вакансією (показуємо з позначкою); ('', '') — ні.
+    Дубль, якщо: (а) збігся ID вакансії з URL; (б) ID видобути не вдається
+    (у вакансії або в рядку таблиці) і збігаються компанія + дата; (в) для тієї
+    самої компанії URL у таблиці порожній. За назвою посади НЕ звіряємо —
+    у таблиці її немає окремою колонкою."""
     flag_status = None
     company = _norm_name(vacancy.company)
+    posted = _parse_date(vacancy.posted_date)
     for row in rows:
         if _same_vacancy_url(vacancy.url, row.url):
             return "дубль", row.status
         if company and _norm_name(row.company) == company:
-            if not row.url.strip() or (row.position and _norm_name(row.position) == _norm_name(vacancy.title)):
+            if not row.url.strip():
+                return "дубль", row.status
+            no_id = vacancy_key(vacancy.url) is None or vacancy_key(row.url) is None
+            if no_id and posted is not None and posted == _parse_date(row.date):
                 return "дубль", row.status
             flag_status = flag_status if flag_status is not None else row.status
     if flag_status is not None:
