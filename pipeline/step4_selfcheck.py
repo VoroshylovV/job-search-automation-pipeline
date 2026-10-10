@@ -36,23 +36,29 @@ TRACKER_NOT_IMPLEMENTED_NOTE = (
 
 
 def _step1_status(step1_result: dict) -> tuple[str, str]:
+    """«Джерел перевірено» рахується за ФАКТИЧНИМ збором (source_statuses),
+    а не за успіхом оцінки Claude; невдала оцінка пишеться окремо —
+    «оцінку не виконано»."""
     statuses = step1_result.get("source_statuses", {})
     ok_count = sum(1 for s in statuses.values() if s.status == "OK")
     total = len(statuses) or 5
     dedup_level = step1_result.get("dedup_level_used", 0)
+    unevaluated = step1_result.get("unevaluated_count", 0)
 
     notes = []
     if ok_count < total:
         notes.append(f"джерел перевірено {ok_count}/{total}")
+    if unevaluated:
+        notes.append(f"оцінку не виконано для {unevaluated} вакансій (помилка Claude)")
     if dedup_level == 0:
         notes.append("дедублікація не виконана (обидва рівні недоступні)")
     elif dedup_level == 2:
         notes.append("спрацював лише рівень 2 дедублікації (таблиця відгуків)")
 
-    if ok_count == total and dedup_level in (1, 2):
-        status = "OK" if dedup_level == 1 else "ЧАСТКОВО"
-    elif ok_count == 0:
+    if ok_count == 0:
         status = "НЕ ВИКОНАНО"
+    elif ok_count == total and dedup_level in (1, 2) and not unevaluated:
+        status = "OK" if dedup_level == 1 else "ЧАСТКОВО"
     else:
         status = "ЧАСТКОВО"
     return status, "; ".join(notes)
@@ -181,11 +187,17 @@ def run_step4(
     shown = len(step1_result.get("vacancies", []))
     conversion_pct = _conversion_pct(total_found, shown)
 
-    trend_comparable = sources_ok_count == 5
-    trend_reason = "" if trend_comparable else f"джерел перевірено {sources_ok_count}/5, а не 5/5"
+    unevaluated = step1_result.get("unevaluated_count", 0)
+    trend_comparable = sources_ok_count == 5 and not unevaluated
+    if sources_ok_count != 5:
+        trend_reason = f"джерел перевірено {sources_ok_count}/5, а не 5/5"
+    elif unevaluated:
+        trend_reason = f"оцінку не виконано для {unevaluated} вакансій"
+    else:
+        trend_reason = ""
 
     vacancies = step1_result.get("vacancies", [])
-    full_coverage = sources_ok_count == 5
+    full_coverage = sources_ok_count == 5 and not unevaluated
     if not full_coverage:
         only_low_or_zero = "н/д"
     elif not vacancies:

@@ -16,6 +16,11 @@ class ClaudeCallError(Exception):
     pass
 
 
+class ClaudeTruncatedError(ClaudeCallError):
+    """Відповідь обрізана (stop_reason == "max_tokens"). Повторювати той самий
+    запит марно — викликач має поділити батч і повторити менші частини."""
+
+
 def _client() -> anthropic.Anthropic:
     if not ANTHROPIC_API_KEY:
         raise ClaudeCallError(
@@ -40,6 +45,12 @@ def call_json(prompt: str, *, max_tokens: int = 8000, retries: int = 1) -> dict:
             max_tokens=max_tokens,
             messages=[{"role": "user", "content": current_prompt}],
         )
+        if getattr(message, "stop_reason", None) == "max_tokens":
+            # Обрізаний JSON не парситься, а повтор того самого запиту дасть
+            # те саме — тому окрема помилка, а не "невалідний JSON".
+            raise ClaudeTruncatedError(
+                f"відповідь Claude обрізана за max_tokens={max_tokens}"
+            )
         raw_text = "".join(
             block.text for block in message.content if block.type == "text"
         ).strip()

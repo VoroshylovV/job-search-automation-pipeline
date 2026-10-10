@@ -201,7 +201,9 @@ UNKNOWN_DATE_FALLBACK_LIMIT = 5
 # крок 1.2). Виділено в конфіг, а не захардкоджено в pipeline-модулях, щоб
 # можна було зменшити без правки коду, якщо контекст-вікно чи бюджет
 # виклику стане тісним.
-CLAUDE_EVAL_CHUNK_SIZE = 40
+CLAUDE_EVAL_CHUNK_SIZE = 20  # 15-20: 40 за раз обрізало відповідь (09.10.2026)
+# Ліміт виводу для оцінки вакансій; при stop_reason=max_tokens батч ділиться навпіл.
+CLAUDE_EVAL_MAX_TOKENS = 12000
 # Етап 2 (повний текст, до scrapers.detail.FULL_TEXT_MAX_CHARS символів на
 # вакансію) — менші порції, щоб не впертися в ліміт виводу/контексту.
 CLAUDE_FULL_EVAL_CHUNK_SIZE = 8
@@ -337,3 +339,9 @@ EMAIL_STATUS_OPTIONS = (
     "headhunting-пропозиція (кандидат не подавався)",
     "очікування без явної відповіді",
 )
+
+# Gmail: ретраї на 403 rateLimitExceeded / 429 (паузи 1, 2, 4, 8 с — до 5 спроб)
+# і невелика пауза між threads.get, щоб не впиратись у "Units per minute per user".
+GMAIL_RETRY_ATTEMPTS = 5
+GMAIL_RETRY_BASE_DELAY_SEC = 1.0
+GMAIL_THREAD_PAUSE_SEC = 0.2

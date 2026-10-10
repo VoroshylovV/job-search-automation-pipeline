@@ -30,11 +30,12 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from claude_orchestrator.client import call_json
+from claude_orchestrator.client import ClaudeTruncatedError, call_json
 from claude_orchestrator.prompts import build_vacancy_eval_prompt
 from config import (
     CANDIDATE_LOCAL_TZ,
     CLAUDE_EVAL_CHUNK_SIZE,
+    CLAUDE_EVAL_MAX_TOKENS,
     CLAUDE_FULL_EVAL_CHUNK_SIZE,
     DATE_WINDOW_DAYS,
     DEDUP_LOG_MAX_AGE_DAYS,
@@ -297,20 +298,66 @@ def _date_source(job: RawJobPosting, ev: dict | None, full_text: bool = False) -
     return "невідома"
 
 
+EVAL_FAILED_RESULT = "не оцінено (помилка Claude)"
+
+
+def _eval_failed_marker() -> dict:
+    """Заглушка оцінки для вакансій, чий батч не вдалось оцінити: не проходить
+    критерії, але в лозі відсіву позначається окремо від справжнього відсіву."""
+    return {"passes_criteria": False, "reject_code": "інше", "reject_reason": "", "eval_failed": True}
+
+
+def _evaluate_batch(chunk: list[RawJobPosting], today: date, stage: str,
+                    chunk_texts: dict[int, str]) -> dict[int, dict] | None:
+    """Оцінка одного батча. Обрізана відповідь (max_tokens) — батч ділиться
+    навпіл і кожна половина повторюється; інша помилка Claude → None (вакансії
+    батча лишаються неоціненими, решту Кроку 1 це не валить)."""
+    prompt = build_vacancy_eval_prompt(chunk, today=today, stage=stage, full_texts=chunk_texts)
+    try:
+        response = call_json(prompt, max_tokens=CLAUDE_EVAL_MAX_TOKENS)
+    except ClaudeTruncatedError:
+        if len(chunk) == 1:
+            logger.error("Відповідь Claude обрізана навіть для однієї вакансії — не оцінено")
+            return None
+        mid = len(chunk) // 2
+        logger.warning("Відповідь Claude обрізана (%d вакансій) — ділю батч навпіл", len(chunk))
+        out: dict[int, dict] = {}
+        for lo, hi in ((0, mid), (mid, len(chunk))):
+            part_texts = {i - lo: t for i, t in chunk_texts.items() if lo <= i < hi}
+            part = _evaluate_batch(chunk[lo:hi], today, stage, part_texts)
+            if part is None:
+                out.update({i: _eval_failed_marker() for i in range(lo, hi)})
+            else:
+                out.update({i + lo: ev for i, ev in part.items()})
+        return out
+    except Exception as exc:  # noqa: BLE001 - будь-яка помилка API/JSON не має валити Крок 1
+        logger.error("Батч з %d вакансій не оцінено (помилка Claude): %s", len(chunk), exc)
+        return None
+    result: dict[int, dict] = {}
+    for ev in response.get("evaluations", []):
+        idx = ev.get("raw_index")
+        if isinstance(idx, int) and 0 <= idx < len(chunk):
+            result[idx] = ev
+    return result
+
+
 def _evaluate(jobs: list[RawJobPosting], today: date, stage: str,
               full_texts: dict[int, str] | None = None) -> dict[int, dict]:
-    """Оцінка Claude порціями. Повертає {індекс у jobs: evaluation}."""
+    """Оцінка Claude батчами (CLAUDE_EVAL_CHUNK_SIZE для картки,
+    CLAUDE_FULL_EVAL_CHUNK_SIZE для повних текстів). Повертає
+    {індекс у jobs: evaluation}; для вакансій батча, що не оцінився, —
+    маркер `eval_failed` (див. _eval_failed_marker)."""
     chunk_size = CLAUDE_FULL_EVAL_CHUNK_SIZE if stage == "full" else CLAUDE_EVAL_CHUNK_SIZE
     full_texts = full_texts or {}
     result: dict[int, dict] = {}
     for start in range(0, len(jobs), chunk_size):
         chunk = jobs[start : start + chunk_size]
         chunk_texts = {i - start: t for i, t in full_texts.items() if start <= i < start + len(chunk)}
-        prompt = build_vacancy_eval_prompt(chunk, today=today, stage=stage, full_texts=chunk_texts)
-        for ev in call_json(prompt).get("evaluations", []):
-            idx = ev.get("raw_index")
-            if isinstance(idx, int) and 0 <= idx < len(chunk):
-                result[idx + start] = ev
+        batch = _evaluate_batch(chunk, today, stage, chunk_texts)
+        if batch is None:
+            result.update({start + i: _eval_failed_marker() for i in range(len(chunk))})
+        else:
+            result.update({start + i: ev for i, ev in batch.items()})
     return result
 
 
@@ -350,6 +397,7 @@ def run_step1(utc_today: date | None = None, local_today: date | None = None) ->
         "dedup_level_used": 0,
         "unknown_date_note": "",
         "decisions": [],
+        "unevaluated_count": 0,
     }
     if not raw_jobs:
         return empty_result
@@ -432,6 +480,8 @@ def run_step1(utc_today: date | None = None, local_today: date | None = None) ->
         ev2 = stage2_evals.get(k)
         if ev2 is None:
             ev2 = {"passes_criteria": False, "reject_code": "інше", "reject_reason": "етап 2 без оцінки"}
+        elif ev2.get("eval_failed"):
+            ev2 = {**ev2, "stage": 2}
         eval_by_index[i] = ev2
         if k in full_text_ok:
             full_text_indices.add(i)
@@ -444,11 +494,19 @@ def run_step1(utc_today: date | None = None, local_today: date | None = None) ->
     # дні": ліміт нижче — свідоме рішення, скільки таких вакансій пускати
     # в звіт за один запуск, а не забутий рудимент чат-версії.
     unknown_date_shown = 0
+    unevaluated_count = 0
     unknown_date_limit_hit = False
     for i, job in enumerate(jobs_to_evaluate):
         ev = eval_by_index.get(i)
         if not ev:
             decisions.append(_decision(job, "відсіяно", "інше", "модель не повернула оцінку", date_source=_date_source(job, None)))
+            continue
+        if ev.get("eval_failed"):
+            unevaluated_count += 1
+            decisions.append(_decision(
+                job, EVAL_FAILED_RESULT, "помилка_Claude",
+                "етап 2" if ev.get("stage") == 2 else "етап 1", date_source=_date_source(job, None),
+            ))
             continue
         if not ev.get("passes_criteria"):
             decisions.append(_decision(
@@ -564,4 +622,5 @@ def run_step1(utc_today: date | None = None, local_today: date | None = None) ->
         "dedup_level_used": dedup_level_used,
         "unknown_date_note": unknown_date_note,
         "decisions": decisions,
+        "unevaluated_count": unevaluated_count,
     }

@@ -230,7 +230,8 @@ def main() -> int:
         step2_result = run_step2()
     except Exception:
         logger.exception("Крок 2 критично провалився")
-        step2_result = {"findings": [], "total_emails_found": 0, "hr_domain_emails": 0, "known_company_emails": 0}
+        step2_result = {"findings": [], "total_emails_found": 0, "hr_domain_emails": 0, "known_company_emails": 0,
+                        "error": "Крок 2 критично провалився, див. лог помилок"}
 
     # Крок 3/4 + звіт у try/finally: push-повідомлення (нижче) має піти
     # БЕЗУМОВНО, навіть якщо щось у Кроці 3/4/формуванні звіту несподівано

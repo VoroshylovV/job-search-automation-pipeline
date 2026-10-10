@@ -55,7 +55,7 @@ def test_date_outside_window_is_filtered_out():
     evals = [_eval(0, posted_date="2020-01-01")]  # давно, поза вікном "сьогодні/вчора"
 
     with patch.object(step1, "_scrape_all", _fake_scrape_all(jobs)), \
-         patch.object(step1, "call_json", lambda prompt: {"evaluations": evals}), \
+         patch.object(step1, "call_json", lambda prompt, **kw: {"evaluations": evals}), \
          patch.object(step1, "_read_dedup_log_with_retry", lambda: (None, "")):
         result = step1.run_step1(utc_today=date(2026, 9, 24), local_today=date(2026, 9, 24))
 
@@ -67,7 +67,7 @@ def test_date_within_window_passes():
     evals = [_eval(0, posted_date="2026-09-24")]  # сьогодні
 
     with patch.object(step1, "_scrape_all", _fake_scrape_all(jobs)), \
-         patch.object(step1, "call_json", lambda prompt: {"evaluations": evals}), \
+         patch.object(step1, "call_json", lambda prompt, **kw: {"evaluations": evals}), \
          patch.object(step1, "_read_dedup_log_with_retry", lambda: (None, "")):
         result = step1.run_step1(utc_today=date(2026, 9, 24), local_today=date(2026, 9, 24))
 
@@ -82,7 +82,7 @@ def test_unknown_date_limit_caps_pass_through():
     evals = [_eval(i, date_undetermined=True) for i in range(5)]
 
     with patch.object(step1, "_scrape_all", _fake_scrape_all(jobs)), \
-         patch.object(step1, "call_json", lambda prompt: {"evaluations": evals}), \
+         patch.object(step1, "call_json", lambda prompt, **kw: {"evaluations": evals}), \
          patch.object(step1, "_read_dedup_log_with_retry", lambda: (None, "")), \
          patch.object(step1, "UNKNOWN_DATE_FALLBACK_LIMIT", 2):
         result = step1.run_step1(utc_today=date(2026, 9, 24), local_today=date(2026, 9, 24))
@@ -96,7 +96,7 @@ def test_unknown_date_note_empty_when_limit_not_hit():
     evals = [_eval(0, date_undetermined=True)]
 
     with patch.object(step1, "_scrape_all", _fake_scrape_all(jobs)), \
-         patch.object(step1, "call_json", lambda prompt: {"evaluations": evals}), \
+         patch.object(step1, "call_json", lambda prompt, **kw: {"evaluations": evals}), \
          patch.object(step1, "_read_dedup_log_with_retry", lambda: (None, "")):
         result = step1.run_step1(utc_today=date(2026, 9, 24), local_today=date(2026, 9, 24))
 
@@ -110,7 +110,7 @@ def test_dedup_level1_filters_seen_urls():
     log_text = "2026-09-20 | https://example.com/0 | Data Analyst 0 — Company 0\n"
 
     with patch.object(step1, "_scrape_all", _fake_scrape_all(jobs)), \
-         patch.object(step1, "call_json", lambda prompt: {"evaluations": evals}), \
+         patch.object(step1, "call_json", lambda prompt, **kw: {"evaluations": evals}), \
          patch.object(step1, "_read_dedup_log_with_retry", lambda: ("doc123", log_text)), \
          patch("google_services.docs.replace_full_text", lambda *a, **k: None):
         result = step1.run_step1(utc_today=date(2026, 9, 24), local_today=date(2026, 9, 24))
@@ -124,7 +124,7 @@ def test_dedup_level2_fallback_when_log_unavailable():
     evals = [_eval(0, date_undetermined=True)]
 
     with patch.object(step1, "_scrape_all", _fake_scrape_all(jobs)), \
-         patch.object(step1, "call_json", lambda prompt: {"evaluations": evals}), \
+         patch.object(step1, "call_json", lambda prompt, **kw: {"evaluations": evals}), \
          patch.object(step1, "_read_dedup_log_with_retry", lambda: (None, None)), \
          patch.object(step1, "_read_tracker_rows", lambda: [step1.TrackerRow("https://example.com/0", "Company 0", "", "Відмова")]):
         result = step1.run_step1(utc_today=date(2026, 9, 24), local_today=date(2026, 9, 24))
@@ -138,7 +138,7 @@ def test_no_dedup_available_shows_without_filtering():
     evals = [_eval(0, date_undetermined=True)]
 
     with patch.object(step1, "_scrape_all", _fake_scrape_all(jobs)), \
-         patch.object(step1, "call_json", lambda prompt: {"evaluations": evals}), \
+         patch.object(step1, "call_json", lambda prompt, **kw: {"evaluations": evals}), \
          patch.object(step1, "_read_dedup_log_with_retry", lambda: (None, None)), \
          patch.object(step1, "_read_tracker_rows", lambda: None):
         result = step1.run_step1(utc_today=date(2026, 9, 24), local_today=date(2026, 9, 24))
@@ -158,7 +158,7 @@ def test_known_url_skips_claude_call_entirely():
     )
     call_count = 0
 
-    def _counting_call_json(prompt):
+    def _counting_call_json(prompt, **kw):
         nonlocal call_count
         call_count += 1
         return {"evaluations": []}
@@ -180,7 +180,7 @@ def test_known_url_partial_prefilter_only_evaluates_unknown():
     log_text = "2026-09-20 | https://example.com/0 | Data Analyst 0 — Company 0\n"
     seen_prompts: list[str] = []
 
-    def _capturing_call_json(prompt):
+    def _capturing_call_json(prompt, **kw):
         seen_prompts.append(prompt)
         return {"evaluations": [{**_eval(0, posted_date="2026-09-24"), "normalized_title": "Data Analyst 1", "normalized_company": "Company 1"}]}
 
@@ -215,7 +215,7 @@ def test_applied_urls_are_excluded_even_when_log_works():
     ]
     calls = []
 
-    def fake_call_json(prompt):
+    def fake_call_json(prompt, **kw):
         calls.append(prompt)
         return {"evaluations": []}
 
@@ -238,7 +238,7 @@ def test_decisions_log_covers_every_raw_job():
     ]                                                          # 3 — модель не повернула оцінку
 
     with patch.object(step1, "_scrape_all", _fake_scrape_all(jobs)), \
-         patch.object(step1, "call_json", lambda prompt: {"evaluations": evals}), \
+         patch.object(step1, "call_json", lambda prompt, **kw: {"evaluations": evals}), \
          patch.object(step1, "_read_dedup_log_with_retry", lambda: (None, "")):
         result = step1.run_step1(utc_today=date(2026, 9, 24), local_today=date(2026, 9, 24))
 
@@ -252,7 +252,7 @@ def test_decisions_log_covers_every_raw_job():
 
 def _run_with(jobs, evals, log_text="", tracker=None):
     with patch.object(step1, "_scrape_all", _fake_scrape_all(jobs)), \
-         patch.object(step1, "call_json", lambda prompt: {"evaluations": evals}), \
+         patch.object(step1, "call_json", lambda prompt, **kw: {"evaluations": evals}), \
          patch.object(step1, "_read_dedup_log_with_retry", lambda: ("doc123", log_text)), \
          patch.object(step1, "_read_tracker_rows", lambda: tracker), \
          patch("google_services.docs.replace_full_text", lambda *a, **k: None):

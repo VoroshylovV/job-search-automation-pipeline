@@ -9,10 +9,18 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 
 from claude_orchestrator.client import call_json
 from claude_orchestrator.prompts import build_email_classify_prompt
-from config import DEDUP_LOG_TITLE, FILENAME_NOISE_TOKENS, GMAIL_LABEL_NAME, METRICS_SHEET_TITLE, RESUME_FOLDER_ID
+from config import (
+    DEDUP_LOG_TITLE,
+    FILENAME_NOISE_TOKENS,
+    GMAIL_LABEL_NAME,
+    GMAIL_THREAD_PAUSE_SEC,
+    METRICS_SHEET_TITLE,
+    RESUME_FOLDER_ID,
+)
 from google_services import gmail
 from google_services.drive import list_folder_files
 from models import EmailFinding
@@ -56,7 +64,9 @@ def run_step2(company_names: list[str] | None = None) -> dict:
     raw_emails: list[dict] = []
     thread_message_ids: list[tuple[str, str]] = []  # (thread_id, message_id) для першого листа треду
 
-    for t in threads:
+    for n, t in enumerate(threads):
+        if n:
+            time.sleep(GMAIL_THREAD_PAUSE_SEC)  # не впиратись у квоту "units per minute"
         thread = gmail.get_thread(t["id"])
         messages = thread.get("messages", [])
         if not messages:

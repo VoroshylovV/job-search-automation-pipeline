@@ -3,12 +3,53 @@ hr@-домени / компанії зі списку), керування ле�
 from __future__ import annotations
 
 import base64
+import json
 import logging
+import time
 
-from config import GMAIL_KEYWORDS, GMAIL_LABEL_NAME, GMAIL_SEARCH_WINDOW_DAYS
+from googleapiclient.errors import HttpError
+
+from config import (
+    GMAIL_KEYWORDS,
+    GMAIL_LABEL_NAME,
+    GMAIL_RETRY_ATTEMPTS,
+    GMAIL_RETRY_BASE_DELAY_SEC,
+    GMAIL_SEARCH_WINDOW_DAYS,
+)
 from google_services.auth import gmail_service
 
 logger = logging.getLogger(__name__)
+
+_RATE_LIMIT_REASONS = {"ratelimitexceeded", "userratelimitexceeded"}
+
+
+def _is_retryable(exc: HttpError) -> bool:
+    """429 завжди; 403 — лише коли причина rateLimitExceeded/userRateLimitExceeded
+    (інші 403, напр. insufficientPermissions, ретраїти марно)."""
+    status = getattr(exc.resp, "status", None)
+    if status == 429:
+        return True
+    if status != 403:
+        return False
+    try:
+        errors = json.loads(exc.content.decode("utf-8")).get("error", {}).get("errors", [])
+        return any(str(e.get("reason", "")).lower() in _RATE_LIMIT_REASONS for e in errors)
+    except (ValueError, AttributeError):
+        return "ratelimitexceeded" in str(exc).lower()
+
+
+def _execute(request, *, attempts: int = GMAIL_RETRY_ATTEMPTS, base_delay: float = GMAIL_RETRY_BASE_DELAY_SEC):
+    """request.execute() з експоненційною паузою (1, 2, 4, 8 с) на ліміти
+    квоти; після останньої спроби помилка піднімається як є."""
+    for attempt in range(attempts):
+        try:
+            return request.execute()
+        except HttpError as exc:
+            if not _is_retryable(exc) or attempt == attempts - 1:
+                raise
+            delay = base_delay * (2 ** attempt)
+            logger.warning("Gmail API: ліміт квоти (спроба %d/%d), пауза %.0f с", attempt + 1, attempts, delay)
+            time.sleep(delay)
 
 
 def _build_query(company_names: list[str]) -> str:
@@ -25,11 +66,11 @@ def _build_query(company_names: list[str]) -> str:
 
 def get_or_create_label(name: str = GMAIL_LABEL_NAME) -> str:
     service = gmail_service()
-    labels = service.users().labels().list(userId="me").execute().get("labels", [])
+    labels = _execute(service.users().labels().list(userId="me")).get("labels", [])
     for label in labels:
         if label["name"] == name:
             return label["id"]
-    created = (
+    created = _execute(
         service.users()
         .labels()
         .create(
@@ -40,7 +81,6 @@ def get_or_create_label(name: str = GMAIL_LABEL_NAME) -> str:
                 "messageListVisibility": "show",
             },
         )
-        .execute()
     )
     return created["id"]
 
@@ -55,11 +95,8 @@ def search_threads(company_names: list[str], label_id_to_exclude: str) -> list[d
     threads: list[dict] = []
     page_token: str | None = None
     while True:
-        resp = (
-            service.users()
-            .threads()
-            .list(userId="me", q=query, pageToken=page_token, maxResults=50)
-            .execute()
+        resp = _execute(
+            service.users().threads().list(userId="me", q=query, pageToken=page_token, maxResults=50)
         )
         threads.extend(resp.get("threads", []))
         page_token = resp.get("nextPageToken")
@@ -74,9 +111,12 @@ def _label_name_safe(label_id_or_name: str) -> str:
     return label_id_or_name
 
 
-def get_thread(thread_id: str) -> dict:
+def get_thread(thread_id: str, *, fmt: str = "full") -> dict:
+    """fmt="full" за замовчуванням: Крок 2 класифікує ТІЛО листа, тож
+    format="metadata" (лише заголовки, значно дешевше за квотою) тут не
+    підходить. Для місць, де тіло не потрібне, передавай fmt="metadata"."""
     service = gmail_service()
-    return service.users().threads().get(userId="me", id=thread_id, format="full").execute()
+    return _execute(service.users().threads().get(userId="me", id=thread_id, format=fmt))
 
 
 def extract_plain_text(message: dict) -> str:
@@ -104,9 +144,9 @@ def extract_plain_text(message: dict) -> str:
 
 def apply_label(message_id: str, label_id: str) -> None:
     service = gmail_service()
-    service.users().messages().modify(
-        userId="me", id=message_id, body={"addLabelIds": [label_id]}
-    ).execute()
+    _execute(
+        service.users().messages().modify(userId="me", id=message_id, body={"addLabelIds": [label_id]})
+    )
 
 
 def header_value(message: dict, name: str) -> str:
