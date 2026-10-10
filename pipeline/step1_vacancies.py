@@ -38,6 +38,7 @@ from config import (
     CLAUDE_EVAL_MAX_TOKENS,
     CLAUDE_MODEL_CARDS,
     CLAUDE_MODEL_FULLTEXT,
+    MAX_FULLTEXT_VACANCIES,
     CLAUDE_FULL_EVAL_CHUNK_SIZE,
     DATE_WINDOW_DAYS,
     DEDUP_LOG_MAX_AGE_DAYS,
@@ -301,12 +302,19 @@ def _date_source(job: RawJobPosting, ev: dict | None, full_text: bool = False) -
 
 
 EVAL_FAILED_RESULT = "не оцінено (помилка Claude)"
+EVAL_STAGE2_CAP_RESULT = "не оцінено (ліміт етапу 2)"
 
 
-def _eval_failed_marker() -> dict:
-    """Заглушка оцінки для вакансій, чий батч не вдалось оцінити: не проходить
-    критерії, але в лозі відсіву позначається окремо від справжнього відсіву."""
-    return {"passes_criteria": False, "reject_code": "інше", "reject_reason": "", "eval_failed": True}
+def _eval_failed_marker(kind: str = "error") -> dict:
+    """Заглушка оцінки для вакансій, які не оцінено: не проходить критерії,
+    але в лозі відсіву позначається окремо від справжнього відсіву.
+    kind: "error" (помилка Claude) | "stage2_cap" (ліміт етапу 2)."""
+    result, code = {
+        "error": (EVAL_FAILED_RESULT, "помилка_Claude"),
+        "stage2_cap": (EVAL_STAGE2_CAP_RESULT, "ліміт_етапу_2"),
+    }[kind]
+    return {"passes_criteria": False, "reject_code": "інше", "reject_reason": "",
+            "eval_failed": True, "kind": kind, "result": result, "code": code}
 
 
 def _evaluate_batch(chunk: list[RawJobPosting], today: date, stage: str,
@@ -404,6 +412,7 @@ def run_step1(utc_today: date | None = None, local_today: date | None = None) ->
         "decisions": [],
         "unevaluated_count": 0,
         "evaluated_count": 0,
+        "stage2_capped_count": 0,
     }
     if not raw_jobs:
         return empty_result
@@ -477,8 +486,22 @@ def run_step1(utc_today: date | None = None, local_today: date | None = None) ->
     eval_by_index = _evaluate(jobs_to_evaluate, local_today, "card")
     # «Оцінено» для журналу вартості: вакансії, що реально отримали оцінку етапу 1.
     evaluated_count = sum(1 for ev in eval_by_index.values() if not ev.get("eval_failed"))
-    stage1_passed = [i for i in range(len(jobs_to_evaluate))
-                     if eval_by_index.get(i) and eval_by_index[i].get("passes_criteria")]
+    stage1_ok = [i for i in range(len(jobs_to_evaluate))
+                 if eval_by_index.get(i) and eval_by_index[i].get("passes_criteria")]
+    # Етап 2 (дорогий): лише High/Medium з етапу 1, найсильніші першими, не
+    # більше MAX_FULLTEXT_VACANCIES. Low на етапі 1 — відсів без повного тексту;
+    # понад ліміт — «не оцінено (ліміт етапу 2)».
+    ranked = sorted(
+        (i for i in stage1_ok if _final_match_level(eval_by_index[i], card_only=False) in ("High", "Medium")),
+        key=lambda i: MATCH_ORDER[_final_match_level(eval_by_index[i], card_only=False)],
+    )
+    stage1_passed = sorted(ranked[:MAX_FULLTEXT_VACANCIES])
+    for i in ranked[MAX_FULLTEXT_VACANCIES:]:
+        eval_by_index[i] = {**_eval_failed_marker("stage2_cap"), "detail": f"ліміт етапу 2: {MAX_FULLTEXT_VACANCIES}"}
+    for i in stage1_ok:
+        if i not in ranked:
+            eval_by_index[i] = {"passes_criteria": False, "reject_code": "інше",
+                                "reject_reason": "Low на етапі 1 (картка) — повний текст не завантажувався"}
     stage2_evals, full_text_ok = _confirm_with_full_text(
         [jobs_to_evaluate[i] for i in stage1_passed], local_today,
         [eval_by_index[i] for i in stage1_passed],
@@ -489,7 +512,7 @@ def run_step1(utc_today: date | None = None, local_today: date | None = None) ->
         if ev2 is None:
             ev2 = {"passes_criteria": False, "reject_code": "інше", "reject_reason": "етап 2 без оцінки"}
         elif ev2.get("eval_failed"):
-            ev2 = {**ev2, "stage": 2}
+            ev2 = {**ev2, "detail": "етап 2"}
         eval_by_index[i] = ev2
         if k in full_text_ok:
             full_text_indices.add(i)
@@ -503,6 +526,7 @@ def run_step1(utc_today: date | None = None, local_today: date | None = None) ->
     # в звіт за один запуск, а не забутий рудимент чат-версії.
     unknown_date_shown = 0
     unevaluated_count = 0
+    stage2_capped_count = 0
     unknown_date_limit_hit = False
     for i, job in enumerate(jobs_to_evaluate):
         ev = eval_by_index.get(i)
@@ -510,10 +534,12 @@ def run_step1(utc_today: date | None = None, local_today: date | None = None) ->
             decisions.append(_decision(job, "відсіяно", "інше", "модель не повернула оцінку", date_source=_date_source(job, None)))
             continue
         if ev.get("eval_failed"):
-            unevaluated_count += 1
+            if ev.get("kind") == "stage2_cap":
+                stage2_capped_count += 1
+            else:
+                unevaluated_count += 1
             decisions.append(_decision(
-                job, EVAL_FAILED_RESULT, "помилка_Claude",
-                "етап 2" if ev.get("stage") == 2 else "етап 1", date_source=_date_source(job, None),
+                job, ev["result"], ev["code"], ev.get("detail") or "етап 1", date_source=_date_source(job, None),
             ))
             continue
         if not ev.get("passes_criteria"):
@@ -632,4 +658,5 @@ def run_step1(utc_today: date | None = None, local_today: date | None = None) ->
         "decisions": decisions,
         "unevaluated_count": unevaluated_count,
         "evaluated_count": evaluated_count,
+        "stage2_capped_count": stage2_capped_count,
     }

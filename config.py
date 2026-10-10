@@ -26,6 +26,8 @@ CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-5-20250929")
 # текст) та Кроку 2 (пошта). Бюджет API: $8.83 до 05.11.2026 (~$0.30/запуск).
 CLAUDE_MODEL_CARDS = os.environ.get("CLAUDE_MODEL_CARDS", "claude-haiku-4-5-20251001")
 CLAUDE_MODEL_FULLTEXT = os.environ.get("CLAUDE_MODEL_FULLTEXT", CLAUDE_MODEL)
+# Етап 2 (повний текст, дорогий): не більше стільки вакансій, лише High/Medium з етапу 1.
+MAX_FULLTEXT_VACANCIES = 10
 
 GOOGLE_CREDENTIALS_PATH = os.environ.get(
     "GOOGLE_CREDENTIALS_PATH", "credentials/credentials.json"

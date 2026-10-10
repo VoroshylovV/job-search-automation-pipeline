@@ -51,6 +51,9 @@ def _step1_status(step1_result: dict) -> tuple[str, str]:
         notes.append(f"джерел перевірено {ok_count}/{total}")
     if unevaluated:
         notes.append(f"оцінку не виконано для {unevaluated} вакансій (помилка Claude)")
+    capped = step1_result.get("stage2_capped_count", 0)
+    if capped:
+        notes.append(f"{capped} вакансій не оцінено (ліміт етапу 2)")
     if dedup_level == 0:
         notes.append("дедублікація не виконана (обидва рівні недоступні)")
     elif dedup_level == 2:
@@ -58,7 +61,7 @@ def _step1_status(step1_result: dict) -> tuple[str, str]:
 
     if ok_count == 0:
         status = "НЕ ВИКОНАНО"
-    elif ok_count == total and dedup_level in (1, 2) and not unevaluated:
+    elif ok_count == total and dedup_level in (1, 2) and not (unevaluated or capped):
         status = "OK" if dedup_level == 1 else "ЧАСТКОВО"
     else:
         status = "ЧАСТКОВО"
@@ -201,7 +204,7 @@ def run_step4(
     shown = len(step1_result.get("vacancies", []))
     conversion_pct = _conversion_pct(total_found, shown)
 
-    unevaluated = step1_result.get("unevaluated_count", 0)
+    unevaluated = step1_result.get("unevaluated_count", 0) + step1_result.get("stage2_capped_count", 0)
     trend_comparable = sources_ok_count == 5 and not unevaluated
     if sources_ok_count != 5:
         trend_reason = f"джерел перевірено {sources_ok_count}/5, а не 5/5"
