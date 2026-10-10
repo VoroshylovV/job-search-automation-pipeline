@@ -31,12 +31,18 @@ def _client() -> anthropic.Anthropic:
 
 
 def call_json(prompt: str, *, max_tokens: int = 8000, retries: int = 1, stage: str = "other",
-              model: str | None = None) -> dict:
+              model: str | None = None, cache_prefix: str | None = None) -> dict:
     """Викликає Claude з prompt, очікує JSON-відповідь, повертає dict.
 
     stage — етап обліку вартості (cards | fulltext | freelance | mail | other),
     див. claude_orchestrator/cost.py. model — модель виклику (за замовчуванням
     config.CLAUDE_MODEL).
+
+    cache_prefix — статична частина промпту (профіль + правила), що йде
+    першим блоком з cache_control: наступні виклики з тим самим префіксом
+    читають її з кешу (дешевше). prompt — динамічна частина. Кеш діє лише від
+    мінімального розміру префікса моделі (≈1024+ токенів, для Haiku — більше);
+    коротші префікси просто не кешуються, без помилки.
 
     При невалідному JSON — один повторний виклик з жорсткішою вимогою
     ("поверни ЛИШЕ JSON, без жодного тексту навколо").
@@ -47,10 +53,17 @@ def call_json(prompt: str, *, max_tokens: int = 8000, retries: int = 1, stage: s
     last_error: Exception | None = None
 
     for attempt in range(retries + 1):
+        if cache_prefix:
+            content = [
+                {"type": "text", "text": cache_prefix, "cache_control": {"type": "ephemeral"}},
+                {"type": "text", "text": current_prompt},
+            ]
+        else:
+            content = current_prompt
         message = client.messages.create(
             model=model,
             max_tokens=max_tokens,
-            messages=[{"role": "user", "content": current_prompt}],
+            messages=[{"role": "user", "content": content}],
         )
         tracker.record(model, getattr(message, "usage", None), stage)
         if getattr(message, "stop_reason", None) == "max_tokens":

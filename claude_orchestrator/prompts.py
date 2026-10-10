@@ -183,13 +183,17 @@ BI/Excel і без роботи з даними — відсів).
 Не вигадуй відсутніх фактів: чого немає в тексті — того немає."""
 
 
-def build_vacancy_eval_prompt(
+def build_vacancy_eval_parts(
     raw_jobs: list[RawJobPosting],
     today: date | None = None,
     stage: str = "card",
     full_texts: dict[int, str] | None = None,
-) -> str:
-    """stage="card" — етап 1 (картка), stage="full" — етап 2 (повний текст).
+) -> tuple[str, str]:
+    """(статична частина, динамічна частина) промпту. Статична — профіль
+    кандидата + правила + блок етапу — однакова для всіх батчів етапу, тож
+    йде в prompt caching (client.call_json(cache_prefix=...)). Динамічна —
+    дата й вакансії батча. static + dynamic == build_vacancy_eval_prompt().
+    stage="card" — етап 1 (картка), stage="full" — етап 2 (повний текст).
     full_texts: {індекс у raw_jobs: повний текст} для етапу 2; для вакансій
     без повного тексту передається картка з full_text_available=false."""
     today = today or date.today()
@@ -213,9 +217,22 @@ def build_vacancy_eval_prompt(
     # build_email_classify_prompt) — без плейсхолдера всередині константи
     # VACANCY_EVAL_SYSTEM_PROMPT, щоб не тримати f-string-екранування
     # ({{ }}) і .replace() як дві паралельні механіки для того самого.
-    return VACANCY_EVAL_SYSTEM_PROMPT + "\n\n" + stage_block + "\n\nСьогоднішня дата: " + today.isoformat() + "\n\nВакансії:\n" + json.dumps(
+    static = VACANCY_EVAL_SYSTEM_PROMPT + "\n\n" + stage_block + "\n\n"
+    dynamic = "Сьогоднішня дата: " + today.isoformat() + "\n\nВакансії:\n" + json.dumps(
         payload, ensure_ascii=False, indent=2
     )
+    return static, dynamic
+
+
+def build_vacancy_eval_prompt(
+    raw_jobs: list[RawJobPosting],
+    today: date | None = None,
+    stage: str = "card",
+    full_texts: dict[int, str] | None = None,
+) -> str:
+    """Той самий промпт одним рядком (без розбиття для кешу)."""
+    static, dynamic = build_vacancy_eval_parts(raw_jobs, today, stage, full_texts)
+    return static + dynamic
 
 
 EMAIL_CLASSIFY_SYSTEM_PROMPT = f"""Ти класифікуєш листи Gmail, знайдені за \
@@ -319,3 +336,11 @@ def build_email_classify_prompt(raw_emails: list[dict]) -> str:
     return EMAIL_CLASSIFY_SYSTEM_PROMPT + "\n\nЛисти:\n" + json.dumps(
         payload, ensure_ascii=False, indent=2
     )
+
+
+def build_email_classify_parts(raw_emails: list[dict]) -> tuple[str, str]:
+    """(статична частина, динамічна) — для prompt caching; разом дають
+    build_email_classify_prompt()."""
+    full = build_email_classify_prompt(raw_emails)
+    static = EMAIL_CLASSIFY_SYSTEM_PROMPT + "\n\n"
+    return static, full[len(static):]

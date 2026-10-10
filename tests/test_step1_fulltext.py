@@ -87,6 +87,7 @@ def test_stage2_full_text_overrides_card(monkeypatch):
     prompts = []
 
     def cj(prompt, **kw):
+        prompt = kw.get("cache_prefix", "") + prompt  # статична частина йде окремо (prompt caching)
         prompts.append(prompt)
         if "ЕТАП 2 з 2" in prompt:
             return {"evaluations": [_ev(0, passes=False, code="формат")]}

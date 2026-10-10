@@ -12,7 +12,7 @@ import re
 import time
 
 from claude_orchestrator.client import call_json
-from claude_orchestrator.prompts import build_email_classify_prompt
+from claude_orchestrator.prompts import build_email_classify_parts
 from config import (
     CLAUDE_MODEL_FULLTEXT,
     DEDUP_LOG_TITLE,
@@ -102,8 +102,8 @@ def run_step2(company_names: list[str] | None = None) -> dict:
         return {"findings": [], "total_emails_found": 0, "hr_domain_emails": 0, "known_company_emails": 0,
                 "company_names": company_names, **thread_stats}
 
-    prompt = build_email_classify_prompt(raw_emails)
-    result = call_json(prompt, stage="mail", model=CLAUDE_MODEL_FULLTEXT)
+    static, dynamic = build_email_classify_parts(raw_emails)
+    result = call_json(dynamic, stage="mail", model=CLAUDE_MODEL_FULLTEXT, cache_prefix=static)
     eval_by_index = {ev["index"]: ev for ev in result.get("evaluations", [])}
 
     company_names_lower = {c.lower() for c in company_names}

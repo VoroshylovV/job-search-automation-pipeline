@@ -31,7 +31,7 @@ from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from claude_orchestrator.client import ClaudeTruncatedError, call_json
-from claude_orchestrator.prompts import build_vacancy_eval_prompt
+from claude_orchestrator.prompts import build_vacancy_eval_parts
 from config import (
     CANDIDATE_LOCAL_TZ,
     CLAUDE_EVAL_CHUNK_SIZE,
@@ -314,10 +314,10 @@ def _evaluate_batch(chunk: list[RawJobPosting], today: date, stage: str,
     """Оцінка одного батча. Обрізана відповідь (max_tokens) — батч ділиться
     навпіл і кожна половина повторюється; інша помилка Claude → None (вакансії
     батча лишаються неоціненими, решту Кроку 1 це не валить)."""
-    prompt = build_vacancy_eval_prompt(chunk, today=today, stage=stage, full_texts=chunk_texts)
+    static, dynamic = build_vacancy_eval_parts(chunk, today=today, stage=stage, full_texts=chunk_texts)
     try:
         response = call_json(
-            prompt, max_tokens=CLAUDE_EVAL_MAX_TOKENS, stage="fulltext" if stage == "full" else "cards",
+            dynamic, max_tokens=CLAUDE_EVAL_MAX_TOKENS, cache_prefix=static, stage="fulltext" if stage == "full" else "cards",
             model=CLAUDE_MODEL_FULLTEXT if stage == "full" else CLAUDE_MODEL_CARDS,
         )
     except ClaudeTruncatedError:
