@@ -9,10 +9,19 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 
 from claude_orchestrator.client import call_json
-from claude_orchestrator.prompts import build_email_classify_prompt
-from config import DEDUP_LOG_TITLE, FILENAME_NOISE_TOKENS, GMAIL_LABEL_NAME, METRICS_SHEET_TITLE, RESUME_FOLDER_ID
+from claude_orchestrator.prompts import build_email_classify_parts
+from config import (
+    CLAUDE_MODEL_FULLTEXT,
+    DEDUP_LOG_TITLE,
+    FILENAME_NOISE_TOKENS,
+    GMAIL_LABEL_NAME,
+    GMAIL_THREAD_PAUSE_SEC,
+    METRICS_SHEET_TITLE,
+    RESUME_FOLDER_ID,
+)
 from google_services import gmail
 from google_services.drive import list_folder_files
 from models import EmailFinding
@@ -56,8 +65,16 @@ def run_step2(company_names: list[str] | None = None) -> dict:
     raw_emails: list[dict] = []
     thread_message_ids: list[tuple[str, str]] = []  # (thread_id, message_id) для першого листа треду
 
-    for t in threads:
-        thread = gmail.get_thread(t["id"])
+    skipped_threads = 0
+    for n, t in enumerate(threads):
+        if n:
+            time.sleep(GMAIL_THREAD_PAUSE_SEC)  # не впиратись у квоту "units per minute"
+        try:
+            thread = gmail.get_thread(t["id"])
+        except Exception as exc:  # noqa: BLE001 - один тред не має валити весь Крок 2
+            skipped_threads += 1
+            logger.warning("Тред %s не вдалося завантажити — пропущено: %s", t["id"], exc)
+            continue
         messages = thread.get("messages", [])
         if not messages:
             continue
@@ -71,11 +88,22 @@ def run_step2(company_names: list[str] | None = None) -> dict:
         )
         thread_message_ids.append((t["id"], message["id"]))
 
-    if not raw_emails:
-        return {"findings": [], "total_emails_found": 0, "hr_domain_emails": 0, "known_company_emails": 0}
+    thread_stats = {
+        "threads_found": len(threads),
+        "threads_loaded": len(threads) - skipped_threads,
+        "threads_skipped": skipped_threads,
+    }
+    logger.info(
+        "Крок 2: тредів знайдено %d, завантажено %d, пропущено %d",
+        thread_stats["threads_found"], thread_stats["threads_loaded"], skipped_threads,
+    )
 
-    prompt = build_email_classify_prompt(raw_emails)
-    result = call_json(prompt)
+    if not raw_emails:
+        return {"findings": [], "total_emails_found": 0, "hr_domain_emails": 0, "known_company_emails": 0,
+                "company_names": company_names, **thread_stats}
+
+    static, dynamic = build_email_classify_parts(raw_emails)
+    result = call_json(dynamic, stage="mail", model=CLAUDE_MODEL_FULLTEXT, cache_prefix=static)
     eval_by_index = {ev["index"]: ev for ev in result.get("evaluations", [])}
 
     company_names_lower = {c.lower() for c in company_names}
@@ -111,4 +139,5 @@ def run_step2(company_names: list[str] | None = None) -> dict:
         "hr_domain_emails": sum(1 for f in findings if f.from_hr_domain),
         "known_company_emails": sum(1 for f in findings if f.from_known_company),
         "company_names": company_names,
+        **thread_stats,
     }

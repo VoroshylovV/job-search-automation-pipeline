@@ -7,6 +7,7 @@ import logging
 
 import anthropic
 
+from claude_orchestrator.cost import tracker
 from config import ANTHROPIC_API_KEY, CLAUDE_MODEL
 
 logger = logging.getLogger(__name__)
@@ -14,6 +15,15 @@ logger = logging.getLogger(__name__)
 
 class ClaudeCallError(Exception):
     pass
+
+
+class ClaudeBudgetExceededError(ClaudeCallError):
+    """Ліміт вартості запуску вичерпано — виклик не робиться."""
+
+
+class ClaudeTruncatedError(ClaudeCallError):
+    """Відповідь обрізана (stop_reason == "max_tokens"). Повторювати той самий
+    запит марно — викликач має поділити батч і повторити менші частини."""
 
 
 def _client() -> anthropic.Anthropic:
@@ -24,22 +34,56 @@ def _client() -> anthropic.Anthropic:
     return anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
 
-def call_json(prompt: str, *, max_tokens: int = 8000, retries: int = 1) -> dict:
+def call_json(prompt: str, *, max_tokens: int = 8000, retries: int = 1, stage: str = "other",
+              model: str | None = None, cache_prefix: str | None = None,
+              budget_limit: float | None = None) -> dict:
     """Викликає Claude з prompt, очікує JSON-відповідь, повертає dict.
+
+    stage — етап обліку вартості (cards | fulltext | freelance | mail | other),
+    див. claude_orchestrator/cost.py. model — модель виклику (за замовчуванням
+    config.CLAUDE_MODEL).
+
+    cache_prefix — статична частина промпту (профіль + правила), що йде
+    першим блоком з cache_control: наступні виклики з тим самим префіксом
+    читають її з кешу (дешевше). prompt — динамічна частина. Кеш діє лише від
+    мінімального розміру префікса моделі (≈1024+ токенів, для Haiku — більше);
+    коротші префікси просто не кешуються, без помилки.
+
+    budget_limit — якщо вартість запуску (cost.tracker) уже сягнула ліміту,
+    виклик не робиться: ClaudeBudgetExceededError.
 
     При невалідному JSON — один повторний виклик з жорсткішою вимогою
     ("поверни ЛИШЕ JSON, без жодного тексту навколо").
     """
     client = _client()
+    model = model or CLAUDE_MODEL
     current_prompt = prompt
     last_error: Exception | None = None
 
     for attempt in range(retries + 1):
+        if tracker.exceeded(budget_limit):
+            raise ClaudeBudgetExceededError(
+                f"ліміт бюджету запуску вичерпано (${tracker.total_usd:.4f} ≥ ${budget_limit:.2f})"
+            )
+        if cache_prefix:
+            content = [
+                {"type": "text", "text": cache_prefix, "cache_control": {"type": "ephemeral"}},
+                {"type": "text", "text": current_prompt},
+            ]
+        else:
+            content = current_prompt
         message = client.messages.create(
-            model=CLAUDE_MODEL,
+            model=model,
             max_tokens=max_tokens,
-            messages=[{"role": "user", "content": current_prompt}],
+            messages=[{"role": "user", "content": content}],
         )
+        tracker.record(model, getattr(message, "usage", None), stage)
+        if getattr(message, "stop_reason", None) == "max_tokens":
+            # Обрізаний JSON не парситься, а повтор того самого запиту дасть
+            # те саме — тому окрема помилка, а не "невалідний JSON".
+            raise ClaudeTruncatedError(
+                f"відповідь Claude обрізана за max_tokens={max_tokens}"
+            )
         raw_text = "".join(
             block.text for block in message.content if block.type == "text"
         ).strip()

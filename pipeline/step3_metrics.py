@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 from datetime import date
 
+from claude_orchestrator.cost import tracker as cost_tracker
 from config import METRICS_SHEET_TITLE, RESUME_FOLDER_ID
 from google_services import drive, sheets
 from models import RunMetrics
@@ -46,6 +47,10 @@ def run_step3(
         source_statuses={
             name: s.status for name, s in step1_result["source_statuses"].items()
         },
+        # Усі виклики Claude (Кроки 1, 1.2, 2) відбуваються до Кроку 3,
+        # тож сума тут уже повна.
+        cost_total_usd=cost_tracker.total_usd,
+        cost_per_shown_usd=(cost_tracker.total_usd / len(vacancies)) if vacancies else None,
     )
 
     notes = []

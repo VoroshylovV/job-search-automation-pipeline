@@ -55,7 +55,7 @@ def test_date_outside_window_is_filtered_out():
     evals = [_eval(0, posted_date="2020-01-01")]  # давно, поза вікном "сьогодні/вчора"
 
     with patch.object(step1, "_scrape_all", _fake_scrape_all(jobs)), \
-         patch.object(step1, "call_json", lambda prompt: {"evaluations": evals}), \
+         patch.object(step1, "call_json", lambda prompt, **kw: {"evaluations": evals}), \
          patch.object(step1, "_read_dedup_log_with_retry", lambda: (None, "")):
         result = step1.run_step1(utc_today=date(2026, 9, 24), local_today=date(2026, 9, 24))
 
@@ -67,7 +67,7 @@ def test_date_within_window_passes():
     evals = [_eval(0, posted_date="2026-09-24")]  # сьогодні
 
     with patch.object(step1, "_scrape_all", _fake_scrape_all(jobs)), \
-         patch.object(step1, "call_json", lambda prompt: {"evaluations": evals}), \
+         patch.object(step1, "call_json", lambda prompt, **kw: {"evaluations": evals}), \
          patch.object(step1, "_read_dedup_log_with_retry", lambda: (None, "")):
         result = step1.run_step1(utc_today=date(2026, 9, 24), local_today=date(2026, 9, 24))
 
@@ -82,7 +82,7 @@ def test_unknown_date_limit_caps_pass_through():
     evals = [_eval(i, date_undetermined=True) for i in range(5)]
 
     with patch.object(step1, "_scrape_all", _fake_scrape_all(jobs)), \
-         patch.object(step1, "call_json", lambda prompt: {"evaluations": evals}), \
+         patch.object(step1, "call_json", lambda prompt, **kw: {"evaluations": evals}), \
          patch.object(step1, "_read_dedup_log_with_retry", lambda: (None, "")), \
          patch.object(step1, "UNKNOWN_DATE_FALLBACK_LIMIT", 2):
         result = step1.run_step1(utc_today=date(2026, 9, 24), local_today=date(2026, 9, 24))
@@ -96,7 +96,7 @@ def test_unknown_date_note_empty_when_limit_not_hit():
     evals = [_eval(0, date_undetermined=True)]
 
     with patch.object(step1, "_scrape_all", _fake_scrape_all(jobs)), \
-         patch.object(step1, "call_json", lambda prompt: {"evaluations": evals}), \
+         patch.object(step1, "call_json", lambda prompt, **kw: {"evaluations": evals}), \
          patch.object(step1, "_read_dedup_log_with_retry", lambda: (None, "")):
         result = step1.run_step1(utc_today=date(2026, 9, 24), local_today=date(2026, 9, 24))
 
@@ -110,7 +110,7 @@ def test_dedup_level1_filters_seen_urls():
     log_text = "2026-09-20 | https://example.com/0 | Data Analyst 0 — Company 0\n"
 
     with patch.object(step1, "_scrape_all", _fake_scrape_all(jobs)), \
-         patch.object(step1, "call_json", lambda prompt: {"evaluations": evals}), \
+         patch.object(step1, "call_json", lambda prompt, **kw: {"evaluations": evals}), \
          patch.object(step1, "_read_dedup_log_with_retry", lambda: ("doc123", log_text)), \
          patch("google_services.docs.replace_full_text", lambda *a, **k: None):
         result = step1.run_step1(utc_today=date(2026, 9, 24), local_today=date(2026, 9, 24))
@@ -124,9 +124,9 @@ def test_dedup_level2_fallback_when_log_unavailable():
     evals = [_eval(0, date_undetermined=True)]
 
     with patch.object(step1, "_scrape_all", _fake_scrape_all(jobs)), \
-         patch.object(step1, "call_json", lambda prompt: {"evaluations": evals}), \
+         patch.object(step1, "call_json", lambda prompt, **kw: {"evaluations": evals}), \
          patch.object(step1, "_read_dedup_log_with_retry", lambda: (None, None)), \
-         patch.object(step1, "_level2_tracker_urls", lambda: ({"https://example.com/0"}, "рівень 2 активний")):
+         patch.object(step1, "_read_tracker_rows", lambda: [step1.TrackerRow("https://example.com/0", "Company 0", "", "Відмова")]):
         result = step1.run_step1(utc_today=date(2026, 9, 24), local_today=date(2026, 9, 24))
 
     assert result["dedup_level_used"] == 2
@@ -138,9 +138,9 @@ def test_no_dedup_available_shows_without_filtering():
     evals = [_eval(0, date_undetermined=True)]
 
     with patch.object(step1, "_scrape_all", _fake_scrape_all(jobs)), \
-         patch.object(step1, "call_json", lambda prompt: {"evaluations": evals}), \
+         patch.object(step1, "call_json", lambda prompt, **kw: {"evaluations": evals}), \
          patch.object(step1, "_read_dedup_log_with_retry", lambda: (None, None)), \
-         patch.object(step1, "_level2_tracker_urls", lambda: (None, "обидва рівні недоступні")):
+         patch.object(step1, "_read_tracker_rows", lambda: None):
         result = step1.run_step1(utc_today=date(2026, 9, 24), local_today=date(2026, 9, 24))
 
     assert result["dedup_level_used"] == 0
@@ -158,7 +158,7 @@ def test_known_url_skips_claude_call_entirely():
     )
     call_count = 0
 
-    def _counting_call_json(prompt):
+    def _counting_call_json(prompt, **kw):
         nonlocal call_count
         call_count += 1
         return {"evaluations": []}
@@ -180,9 +180,9 @@ def test_known_url_partial_prefilter_only_evaluates_unknown():
     log_text = "2026-09-20 | https://example.com/0 | Data Analyst 0 — Company 0\n"
     seen_prompts: list[str] = []
 
-    def _capturing_call_json(prompt):
+    def _capturing_call_json(prompt, **kw):
         seen_prompts.append(prompt)
-        return {"evaluations": [_eval(0, posted_date="2026-09-24")]}
+        return {"evaluations": [{**_eval(0, posted_date="2026-09-24"), "normalized_title": "Data Analyst 1", "normalized_company": "Company 1"}]}
 
     with patch.object(step1, "_scrape_all", _fake_scrape_all(jobs)), \
          patch.object(step1, "call_json", _capturing_call_json), \
@@ -215,14 +215,14 @@ def test_applied_urls_are_excluded_even_when_log_works():
     ]
     calls = []
 
-    def fake_call_json(prompt):
+    def fake_call_json(prompt, **kw):
         calls.append(prompt)
         return {"evaluations": []}
 
     with patch.object(step1, "_scrape_all", _fake_scrape_all(jobs)), \
          patch.object(step1, "call_json", fake_call_json), \
          patch.object(step1, "_read_dedup_log_with_retry", lambda: ("doc123", "")), \
-         patch.object(step1, "_applied_urls", lambda: {"https://work.ua/jobs/7402564"}), \
+         patch.object(step1, "_read_tracker_rows", lambda: [step1.TrackerRow("https://work.ua/jobs/7402564", "Hay credito", "", "")]), \
          patch("google_services.docs.replace_full_text", lambda *a, **k: None):
         result = step1.run_step1(utc_today=date(2026, 9, 25), local_today=date(2026, 9, 25))
     assert calls == []  # відфільтровано ДО платного виклику Claude
@@ -238,7 +238,7 @@ def test_decisions_log_covers_every_raw_job():
     ]                                                          # 3 — модель не повернула оцінку
 
     with patch.object(step1, "_scrape_all", _fake_scrape_all(jobs)), \
-         patch.object(step1, "call_json", lambda prompt: {"evaluations": evals}), \
+         patch.object(step1, "call_json", lambda prompt, **kw: {"evaluations": evals}), \
          patch.object(step1, "_read_dedup_log_with_retry", lambda: (None, "")):
         result = step1.run_step1(utc_today=date(2026, 9, 24), local_today=date(2026, 9, 24))
 
@@ -248,3 +248,86 @@ def test_decisions_log_covers_every_raw_job():
     assert by_url["https://example.com/1"]["code"] == "досвід"
     assert by_url["https://example.com/2"]["code"] == "дата"
     assert by_url["https://example.com/3"]["code"] == "інше"
+
+
+def _run_with(jobs, evals, log_text="", tracker=None):
+    with patch.object(step1, "_scrape_all", _fake_scrape_all(jobs)), \
+         patch.object(step1, "call_json", lambda prompt, **kw: {"evaluations": evals}), \
+         patch.object(step1, "_read_dedup_log_with_retry", lambda: ("doc123", log_text)), \
+         patch.object(step1, "_read_tracker_rows", lambda: tracker), \
+         patch("google_services.docs.replace_full_text", lambda *a, **k: None):
+        return step1.run_step1(utc_today=date(2026, 10, 9), local_today=date(2026, 10, 9))
+
+
+def test_vacancy_key_extracts_id_from_url_variants():
+    assert step1.vacancy_key("https://robota.ua/company123/vacancy456") == "robota.ua:456"
+    assert step1.vacancy_key("https://www.work.ua/jobs/7402564/") == "work.ua:7402564"
+    assert step1.vacancy_key("https://jobs.dou.ua/companies/x/vacancies/99/") == "dou.ua:99"
+    assert step1.vacancy_key("https://example.com/about") is None
+
+
+def test_dedup_by_id_ignores_url_form():
+    jobs = [RawJobPosting(source="work.ua", title="Аналітик", company="C", url="https://www.work.ua/jobs/77/?utm=1",
+                          posted_raw="", salary_raw="", description_snippet="")]
+    log = "2026-10-01 | https://work.ua/jobs/77 | Аналітик — C\n"
+    result = _run_with(jobs, [], log_text=log)
+    assert result["vacancies"] == []
+
+
+def test_both_dedup_levels_run_in_parallel():
+    """Лог доступний, але вакансія є лише в таблиці відгуків — все одно дубль."""
+    jobs = [_job(0)]
+    evals = [_eval(0, posted_date="2026-10-09")]
+    tracker = [step1.TrackerRow("https://example.com/0", "Company 0", "", "Співбесіда")]
+    result = _run_with(jobs, evals, tracker=tracker)
+    assert result["vacancies"] == []
+    assert result["decisions"][0]["code"] == "подано"
+
+
+def test_company_in_tracker_other_vacancy_is_flagged():
+    jobs = [_job(0)]
+    evals = [_eval(0, posted_date="2026-10-09")]
+    tracker = [step1.TrackerRow("https://work.ua/jobs/123", "Company 0", "01.10.2026", "Відмова")]
+    result = _run_with(jobs, evals, tracker=tracker)
+    assert len(result["vacancies"]) == 1
+    assert result["vacancies"][0].company_flag == "Компанія вже в таблиці: Відмова"
+
+
+def test_company_in_tracker_empty_url_is_duplicate():
+    evals = [_eval(0, posted_date="2026-10-09")]
+    tracker = [step1.TrackerRow("", "Company 0", "", "Подано")]
+    assert _run_with([_job(0)], evals, tracker=tracker)["vacancies"] == []
+
+
+def test_company_plus_date_is_duplicate_only_when_id_missing():
+    evals = [_eval(0, posted_date="2026-10-09")]
+    # у URL ні вакансії, ні таблиці ID немає -> компанія + дата
+    no_id = [step1.TrackerRow("https://example.com/about", "Company 0", "09.10.2026", "Подано")]
+    assert _run_with([_job(0)], evals, tracker=no_id)["vacancies"] == []
+    other_date = [step1.TrackerRow("https://example.com/about", "Company 0", "01.10.2026", "Подано")]
+    assert len(_run_with([_job(0)], evals, tracker=other_date)["vacancies"]) == 1
+    # обидва мають ID, вони різні -> дата не береться до уваги
+    job = RawJobPosting(source="work.ua", title="Data Analyst 0", company="Company 0", url="https://work.ua/jobs/5",
+                        posted_raw="", salary_raw="", description_snippet="")
+    with_id = [step1.TrackerRow("https://work.ua/jobs/6", "Company 0", "09.10.2026", "Подано")]
+    assert len(_run_with([job], evals, tracker=with_id)["vacancies"]) == 1
+
+
+def test_military_rejection_passes_through_with_code():
+    jobs = [_job(0)]
+    ev = {**_eval(0, passes=False), "reject_code": "військова служба"}
+    result = _run_with(jobs, [ev])
+    assert result["vacancies"] == []
+    assert result["decisions"][0]["code"] == "військова служба"
+
+
+def test_final_match_level_formula():
+    f = step1._final_match_level
+    sc = lambda a, b, c: {"match_scores": {"skills": a, "duties": b, "expectations": c}, "match_level": "High"}
+    assert f(sc(2, 2, 1), False) == "High"
+    assert f(sc(2, 1, 1), False) == "Medium"
+    assert f(sc(0, 2, 2), False) == "Low"      # A=0 -> Low
+    assert f(sc(1, 1, 0), False) == "Low"      # сума 2
+    assert f(sc(2, 2, 2), True) == "Medium"    # лише картка
+    assert f({"match_level": "Medium", "match_scores": {"skills": 2, "duties": 2, "expectations": 2}}, False) == "Medium"  # кап моделі
+    assert f({"match_level": "High"}, False) == "High"  # без балів — рівень моделі

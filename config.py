@@ -21,7 +21,18 @@ load_dotenv()  # читає .env у робочій директорії, якщ�
 # (див. .env.example). Google credentials — з credentials/credentials.json
 # (OAuth client secret, завантажений з Google Cloud Console).
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
-CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-5-20250929")
+CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "claude-sonnet-5-5")
+# Дешева модель для етапу 1 (оцінка карток) і сильніша для етапу 2 (повний
+# текст) та Кроку 2 (пошта). Бюджет API: $8.83 до 05.11.2026 (~$0.30/запуск).
+CLAUDE_MODEL_CARDS = os.environ.get("CLAUDE_MODEL_CARDS", "claude-haiku-4-5-20251001")
+CLAUDE_MODEL_FULLTEXT = os.environ.get("CLAUDE_MODEL_FULLTEXT", CLAUDE_MODEL)
+# Етап 2 (повний текст, дорогий): не більше стільки вакансій, лише High/Medium з етапу 1.
+MAX_FULLTEXT_VACANCIES = 10
+# Ліміт вартості Claude за запуск (USD). Крок 1 перестає викликати API, коли
+# вартість сягає MAX_RUN_COST_USD - BUDGET_RESERVE_LATER_STEPS_USD (резерв для
+# Кроків 1.2 і 2, що йдуть далі); решта вакансій — «не оцінено (ліміт бюджету)».
+MAX_RUN_COST_USD = float(os.environ.get("MAX_RUN_COST_USD", "0.30"))
+BUDGET_RESERVE_LATER_STEPS_USD = 0.05
 
 GOOGLE_CREDENTIALS_PATH = os.environ.get(
     "GOOGLE_CREDENTIALS_PATH", "credentials/credentials.json"
@@ -99,6 +110,10 @@ TRACKER_SHEET_TITLE = "Ворошилов відгуки на вакансії"
 TRACKER_SHEET_NAME = "Interview"  # вкладка з відгуками
 TRACKER_URL_COLUMN_HEADER = "Посилання на вакансію"
 TRACKER_COMPANY_COLUMN_HEADER = "Компанія"
+# Заголовок «дата» в таблиці повторюється (відгук, співбесіди); find_header_row
+# бере перший збіг — дату відгуку одразу після «Компанія». Назви посади в
+# таблиці окремої колонки немає (вільний текст у «Примітки») — за нею не звіряємо.
+TRACKER_DATE_COLUMN_HEADER = "дата"
 TRACKER_RESULT_COLUMN_HEADER = "Результат відгуку"
 TRACKER_NOTES_COLUMN_HEADER = "Примітки"
 
@@ -197,7 +212,9 @@ UNKNOWN_DATE_FALLBACK_LIMIT = 5
 # крок 1.2). Виділено в конфіг, а не захардкоджено в pipeline-модулях, щоб
 # можна було зменшити без правки коду, якщо контекст-вікно чи бюджет
 # виклику стане тісним.
-CLAUDE_EVAL_CHUNK_SIZE = 40
+CLAUDE_EVAL_CHUNK_SIZE = 20  # 15-20: 40 за раз обрізало відповідь (09.10.2026)
+# Ліміт виводу для оцінки вакансій; при stop_reason=max_tokens батч ділиться навпіл.
+CLAUDE_EVAL_MAX_TOKENS = 12000
 # Етап 2 (повний текст, до scrapers.detail.FULL_TEXT_MAX_CHARS символів на
 # вакансію) — менші порції, щоб не впертися в ліміт виводу/контексту.
 CLAUDE_FULL_EVAL_CHUNK_SIZE = 8
@@ -315,7 +332,13 @@ PUSH_MESSAGE_TEXT = "Щоденну перевірку завершено, мо�
 # --------------------------------------------------------------------------
 # Крок 2 — пошта
 # --------------------------------------------------------------------------
-GMAIL_SEARCH_WINDOW_DAYS = 30
+# 2 доби (було 30): оброблені треди й так отримують лейбл і виключаються з
+# пошуку, а 30-денне вікно щодня тягнуло десятки зайвих get_thread і впиралось
+# у квоту Gmail (10.10.2026). Якщо запуски пропускаються 3+ доби поспіль —
+# збільш тимчасово.
+GMAIL_SEARCH_WINDOW_DAYS = 2
+# Максимум тредів за один запуск (найновіші першими — так їх повертає Gmail).
+GMAIL_MAX_THREADS_PER_RUN = 50
 GMAIL_KEYWORDS = (
     "вакансія", "співбесіда", "candidate", "interview", "resume", "application",
 )
@@ -333,3 +356,27 @@ EMAIL_STATUS_OPTIONS = (
     "headhunting-пропозиція (кандидат не подавався)",
     "очікування без явної відповіді",
 )
+
+# Gmail: на 429 і 403 rateLimitExceeded — ОДНА пауза 60 с і один повтор
+# (квота "units per minute" скидається за хвилину; короткі 1/2/4/8 с не
+# допомагали). Плюс невелика пауза між threads.get.
+GMAIL_RATE_LIMIT_PAUSE_SEC = 60
+GMAIL_THREAD_PAUSE_SEC = 0.2
+
+# --------------------------------------------------------------------------
+# Вартість Claude (облік за usage кожної відповіді, claude_orchestrator/cost.py)
+# --------------------------------------------------------------------------
+# USD за 1 млн токенів: (вхід, вихід) за родиною моделі (підрядок назви
+# моделі). Це оцінка для бюджету — ПЕРЕВІР актуальні ціни на
+# https://www.anthropic.com/pricing. Невідома модель рахується за
+# найдорожчою родиною (консервативно).
+MODEL_PRICES_PER_MTOK = {
+    "haiku": (1.0, 5.0),
+    "sonnet": (3.0, 15.0),
+    "opus": (5.0, 25.0),
+}
+FALLBACK_PRICE_PER_MTOK = (5.0, 25.0)
+CACHE_WRITE_MULTIPLIER = 1.25  # запис у prompt cache (TTL 5 хв) = 1.25x ціни входу
+CACHE_READ_MULTIPLIER = 0.10   # читання з кешу = 0.1x ціни входу
+# Журнал вартості: один рядок на запуск, дописується (docs/COSTS.md).
+COSTS_CSV_PATH = "logs/costs.csv"
