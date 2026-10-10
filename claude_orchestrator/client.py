@@ -17,6 +17,10 @@ class ClaudeCallError(Exception):
     pass
 
 
+class ClaudeBudgetExceededError(ClaudeCallError):
+    """Ліміт вартості запуску вичерпано — виклик не робиться."""
+
+
 class ClaudeTruncatedError(ClaudeCallError):
     """Відповідь обрізана (stop_reason == "max_tokens"). Повторювати той самий
     запит марно — викликач має поділити батч і повторити менші частини."""
@@ -31,7 +35,8 @@ def _client() -> anthropic.Anthropic:
 
 
 def call_json(prompt: str, *, max_tokens: int = 8000, retries: int = 1, stage: str = "other",
-              model: str | None = None, cache_prefix: str | None = None) -> dict:
+              model: str | None = None, cache_prefix: str | None = None,
+              budget_limit: float | None = None) -> dict:
     """Викликає Claude з prompt, очікує JSON-відповідь, повертає dict.
 
     stage — етап обліку вартості (cards | fulltext | freelance | mail | other),
@@ -44,6 +49,9 @@ def call_json(prompt: str, *, max_tokens: int = 8000, retries: int = 1, stage: s
     мінімального розміру префікса моделі (≈1024+ токенів, для Haiku — більше);
     коротші префікси просто не кешуються, без помилки.
 
+    budget_limit — якщо вартість запуску (cost.tracker) уже сягнула ліміту,
+    виклик не робиться: ClaudeBudgetExceededError.
+
     При невалідному JSON — один повторний виклик з жорсткішою вимогою
     ("поверни ЛИШЕ JSON, без жодного тексту навколо").
     """
@@ -53,6 +61,10 @@ def call_json(prompt: str, *, max_tokens: int = 8000, retries: int = 1, stage: s
     last_error: Exception | None = None
 
     for attempt in range(retries + 1):
+        if tracker.exceeded(budget_limit):
+            raise ClaudeBudgetExceededError(
+                f"ліміт бюджету запуску вичерпано (${tracker.total_usd:.4f} ≥ ${budget_limit:.2f})"
+            )
         if cache_prefix:
             content = [
                 {"type": "text", "text": cache_prefix, "cache_control": {"type": "ephemeral"}},

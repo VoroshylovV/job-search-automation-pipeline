@@ -106,7 +106,7 @@ def test_selfcheck_note_has_total_and_stage_breakdown():
     cost.tracker.record("claude-sonnet-4-5", _usage(1_000_000), "cards")      # $3
     cost.tracker.record("claude-sonnet-4-5", _usage(0, 100_000), "fulltext")  # $1.5
     note = s4.cost_note()
-    assert "Вартість Claude: $4.500 (2 викликів)" in note
+    assert "Вартість Claude: $4.500 (ліміт $0.30, 2 викликів)" in note
     assert "етап 1 (картки) $3.000" in note and "етап 2 (повні тексти) $1.500" in note
     assert "Крок 1.2 (фріланс) $0.000" in note and "Крок 2 (пошта) $0.000" in note
 

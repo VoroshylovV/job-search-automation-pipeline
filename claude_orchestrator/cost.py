@@ -93,6 +93,9 @@ class CostTracker:
     def calls(self) -> int:
         return sum(st.calls for st in self.stages.values())
 
+    def exceeded(self, limit_usd: float | None) -> bool:
+        return limit_usd is not None and self.total_usd >= limit_usd
+
     def reset(self) -> None:
         self.stages = {}
 

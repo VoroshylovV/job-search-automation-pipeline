@@ -30,15 +30,17 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
-from claude_orchestrator.client import ClaudeTruncatedError, call_json
+from claude_orchestrator.client import ClaudeBudgetExceededError, ClaudeTruncatedError, call_json
 from claude_orchestrator.prompts import build_vacancy_eval_parts
 from config import (
     CANDIDATE_LOCAL_TZ,
     CLAUDE_EVAL_CHUNK_SIZE,
+    BUDGET_RESERVE_LATER_STEPS_USD,
     CLAUDE_EVAL_MAX_TOKENS,
     CLAUDE_MODEL_CARDS,
     CLAUDE_MODEL_FULLTEXT,
     MAX_FULLTEXT_VACANCIES,
+    MAX_RUN_COST_USD,
     CLAUDE_FULL_EVAL_CHUNK_SIZE,
     DATE_WINDOW_DAYS,
     DEDUP_LOG_MAX_AGE_DAYS,
@@ -302,32 +304,43 @@ def _date_source(job: RawJobPosting, ev: dict | None, full_text: bool = False) -
 
 
 EVAL_FAILED_RESULT = "не оцінено (помилка Claude)"
+EVAL_BUDGET_RESULT = "не оцінено (ліміт бюджету)"
 EVAL_STAGE2_CAP_RESULT = "не оцінено (ліміт етапу 2)"
 
 
 def _eval_failed_marker(kind: str = "error") -> dict:
     """Заглушка оцінки для вакансій, які не оцінено: не проходить критерії,
     але в лозі відсіву позначається окремо від справжнього відсіву.
-    kind: "error" (помилка Claude) | "stage2_cap" (ліміт етапу 2)."""
+    kind: "error" (помилка Claude) | "budget" (ліміт вартості) | "stage2_cap"."""
     result, code = {
         "error": (EVAL_FAILED_RESULT, "помилка_Claude"),
+        "budget": (EVAL_BUDGET_RESULT, "ліміт_бюджету"),
         "stage2_cap": (EVAL_STAGE2_CAP_RESULT, "ліміт_етапу_2"),
     }[kind]
     return {"passes_criteria": False, "reject_code": "інше", "reject_reason": "",
             "eval_failed": True, "kind": kind, "result": result, "code": code}
 
 
+def _budget_limit() -> float:
+    """Ліміт Кроку 1: решта бюджету лишається Кроками 1.2 і 2."""
+    return MAX_RUN_COST_USD - BUDGET_RESERVE_LATER_STEPS_USD
+
+
 def _evaluate_batch(chunk: list[RawJobPosting], today: date, stage: str,
                     chunk_texts: dict[int, str]) -> dict[int, dict] | None:
     """Оцінка одного батча. Обрізана відповідь (max_tokens) — батч ділиться
-    навпіл і кожна половина повторюється; інша помилка Claude → None (вакансії
-    батча лишаються неоціненими, решту Кроку 1 це не валить)."""
+    навпіл і кожна половина повторюється; помилка Claude → None (вакансії
+    батча лишаються неоціненими), ліміт бюджету → маркер «ліміт бюджету»
+    (виклик не робиться). Решту Кроку 1 це не валить."""
     static, dynamic = build_vacancy_eval_parts(chunk, today=today, stage=stage, full_texts=chunk_texts)
     try:
         response = call_json(
             dynamic, max_tokens=CLAUDE_EVAL_MAX_TOKENS, cache_prefix=static, stage="fulltext" if stage == "full" else "cards",
             model=CLAUDE_MODEL_FULLTEXT if stage == "full" else CLAUDE_MODEL_CARDS,
+            budget_limit=_budget_limit(),
         )
+    except ClaudeBudgetExceededError:
+        return {i: _eval_failed_marker("budget") for i in range(len(chunk))}
     except ClaudeTruncatedError:
         if len(chunk) == 1:
             logger.error("Відповідь Claude обрізана навіть для однієї вакансії — не оцінено")
@@ -412,6 +425,7 @@ def run_step1(utc_today: date | None = None, local_today: date | None = None) ->
         "decisions": [],
         "unevaluated_count": 0,
         "evaluated_count": 0,
+        "budget_unevaluated_count": 0,
         "stage2_capped_count": 0,
     }
     if not raw_jobs:
@@ -526,6 +540,7 @@ def run_step1(utc_today: date | None = None, local_today: date | None = None) ->
     # в звіт за один запуск, а не забутий рудимент чат-версії.
     unknown_date_shown = 0
     unevaluated_count = 0
+    budget_unevaluated_count = 0
     stage2_capped_count = 0
     unknown_date_limit_hit = False
     for i, job in enumerate(jobs_to_evaluate):
@@ -534,7 +549,9 @@ def run_step1(utc_today: date | None = None, local_today: date | None = None) ->
             decisions.append(_decision(job, "відсіяно", "інше", "модель не повернула оцінку", date_source=_date_source(job, None)))
             continue
         if ev.get("eval_failed"):
-            if ev.get("kind") == "stage2_cap":
+            if ev.get("kind") == "budget":
+                budget_unevaluated_count += 1
+            elif ev.get("kind") == "stage2_cap":
                 stage2_capped_count += 1
             else:
                 unevaluated_count += 1
@@ -658,5 +675,6 @@ def run_step1(utc_today: date | None = None, local_today: date | None = None) ->
         "decisions": decisions,
         "unevaluated_count": unevaluated_count,
         "evaluated_count": evaluated_count,
+        "budget_unevaluated_count": budget_unevaluated_count,
         "stage2_capped_count": stage2_capped_count,
     }

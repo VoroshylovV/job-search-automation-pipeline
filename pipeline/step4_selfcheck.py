@@ -19,6 +19,7 @@ import logging
 
 from claude_orchestrator.cost import STAGES, STAGE_TITLES, tracker as cost_tracker
 from config import (
+    MAX_RUN_COST_USD,
     LOW_MATCH_STREAK_HEURISTIC_RUNS,
     RESUME_FOLDER_ID,
     SELFCHECK_SHEET_TITLE,
@@ -51,6 +52,9 @@ def _step1_status(step1_result: dict) -> tuple[str, str]:
         notes.append(f"джерел перевірено {ok_count}/{total}")
     if unevaluated:
         notes.append(f"оцінку не виконано для {unevaluated} вакансій (помилка Claude)")
+    budget_skipped = step1_result.get("budget_unevaluated_count", 0)
+    if budget_skipped:
+        notes.append(f"{budget_skipped} вакансій не оцінено (ліміт бюджету)")
     capped = step1_result.get("stage2_capped_count", 0)
     if capped:
         notes.append(f"{capped} вакансій не оцінено (ліміт етапу 2)")
@@ -61,7 +65,7 @@ def _step1_status(step1_result: dict) -> tuple[str, str]:
 
     if ok_count == 0:
         status = "НЕ ВИКОНАНО"
-    elif ok_count == total and dedup_level in (1, 2) and not (unevaluated or capped):
+    elif ok_count == total and dedup_level in (1, 2) and not (unevaluated or budget_skipped or capped):
         status = "OK" if dedup_level == 1 else "ЧАСТКОВО"
     else:
         status = "ЧАСТКОВО"
@@ -75,7 +79,10 @@ def cost_note() -> str:
     other = cost_tracker.stage("other").usd
     if other:
         parts.append(f"{STAGE_TITLES['other']} ${other:.3f}")
-    return f"Вартість Claude: ${cost_tracker.total_usd:.3f} ({cost_tracker.calls} викликів): " + ", ".join(parts)
+    return (
+        f"Вартість Claude: ${cost_tracker.total_usd:.3f} (ліміт ${MAX_RUN_COST_USD:.2f}, "
+        f"{cost_tracker.calls} викликів): " + ", ".join(parts)
+    )
 
 
 def _step2_status(step2_result: dict) -> tuple[str, str]:
@@ -204,7 +211,11 @@ def run_step4(
     shown = len(step1_result.get("vacancies", []))
     conversion_pct = _conversion_pct(total_found, shown)
 
-    unevaluated = step1_result.get("unevaluated_count", 0) + step1_result.get("stage2_capped_count", 0)
+    unevaluated = (
+        step1_result.get("unevaluated_count", 0)
+        + step1_result.get("budget_unevaluated_count", 0)
+        + step1_result.get("stage2_capped_count", 0)
+    )
     trend_comparable = sources_ok_count == 5 and not unevaluated
     if sources_ok_count != 5:
         trend_reason = f"джерел перевірено {sources_ok_count}/5, а не 5/5"
