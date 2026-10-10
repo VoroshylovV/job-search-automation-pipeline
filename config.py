@@ -22,6 +22,10 @@ load_dotenv()  # читає .env у робочій директорії, якщ�
 # (OAuth client secret, завантажений з Google Cloud Console).
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-5-20250929")
+# Дешева модель для етапу 1 (оцінка карток) і сильніша для етапу 2 (повний
+# текст) та Кроку 2 (пошта). Бюджет API: $8.83 до 05.11.2026 (~$0.30/запуск).
+CLAUDE_MODEL_CARDS = os.environ.get("CLAUDE_MODEL_CARDS", "claude-haiku-4-5-20251001")
+CLAUDE_MODEL_FULLTEXT = os.environ.get("CLAUDE_MODEL_FULLTEXT", CLAUDE_MODEL)
 
 GOOGLE_CREDENTIALS_PATH = os.environ.get(
     "GOOGLE_CREDENTIALS_PATH", "credentials/credentials.json"

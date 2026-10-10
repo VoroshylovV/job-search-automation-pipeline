@@ -36,6 +36,8 @@ from config import (
     CANDIDATE_LOCAL_TZ,
     CLAUDE_EVAL_CHUNK_SIZE,
     CLAUDE_EVAL_MAX_TOKENS,
+    CLAUDE_MODEL_CARDS,
+    CLAUDE_MODEL_FULLTEXT,
     CLAUDE_FULL_EVAL_CHUNK_SIZE,
     DATE_WINDOW_DAYS,
     DEDUP_LOG_MAX_AGE_DAYS,
@@ -315,7 +317,8 @@ def _evaluate_batch(chunk: list[RawJobPosting], today: date, stage: str,
     prompt = build_vacancy_eval_prompt(chunk, today=today, stage=stage, full_texts=chunk_texts)
     try:
         response = call_json(
-            prompt, max_tokens=CLAUDE_EVAL_MAX_TOKENS, stage="fulltext" if stage == "full" else "cards"
+            prompt, max_tokens=CLAUDE_EVAL_MAX_TOKENS, stage="fulltext" if stage == "full" else "cards",
+            model=CLAUDE_MODEL_FULLTEXT if stage == "full" else CLAUDE_MODEL_CARDS,
         )
     except ClaudeTruncatedError:
         if len(chunk) == 1:

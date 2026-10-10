@@ -14,6 +14,7 @@ import time
 from claude_orchestrator.client import call_json
 from claude_orchestrator.prompts import build_email_classify_prompt
 from config import (
+    CLAUDE_MODEL_FULLTEXT,
     DEDUP_LOG_TITLE,
     FILENAME_NOISE_TOKENS,
     GMAIL_LABEL_NAME,
@@ -102,7 +103,7 @@ def run_step2(company_names: list[str] | None = None) -> dict:
                 "company_names": company_names, **thread_stats}
 
     prompt = build_email_classify_prompt(raw_emails)
-    result = call_json(prompt, stage="mail")
+    result = call_json(prompt, stage="mail", model=CLAUDE_MODEL_FULLTEXT)
     eval_by_index = {ev["index"]: ev for ev in result.get("evaluations", [])}
 
     company_names_lower = {c.lower() for c in company_names}
