@@ -12,8 +12,8 @@ from googleapiclient.errors import HttpError
 from config import (
     GMAIL_KEYWORDS,
     GMAIL_LABEL_NAME,
-    GMAIL_RETRY_ATTEMPTS,
-    GMAIL_RETRY_BASE_DELAY_SEC,
+    GMAIL_MAX_THREADS_PER_RUN,
+    GMAIL_RATE_LIMIT_PAUSE_SEC,
     GMAIL_SEARCH_WINDOW_DAYS,
 )
 from google_services.auth import gmail_service
@@ -38,18 +38,17 @@ def _is_retryable(exc: HttpError) -> bool:
         return "ratelimitexceeded" in str(exc).lower()
 
 
-def _execute(request, *, attempts: int = GMAIL_RETRY_ATTEMPTS, base_delay: float = GMAIL_RETRY_BASE_DELAY_SEC):
-    """request.execute() з експоненційною паузою (1, 2, 4, 8 с) на ліміти
-    квоти; після останньої спроби помилка піднімається як є."""
-    for attempt in range(attempts):
-        try:
-            return request.execute()
-        except HttpError as exc:
-            if not _is_retryable(exc) or attempt == attempts - 1:
-                raise
-            delay = base_delay * (2 ** attempt)
-            logger.warning("Gmail API: ліміт квоти (спроба %d/%d), пауза %.0f с", attempt + 1, attempts, delay)
-            time.sleep(delay)
+def _execute(request, *, pause: float = GMAIL_RATE_LIMIT_PAUSE_SEC):
+    """request.execute(); на ліміт квоти (429 / 403 rateLimitExceeded) — одна
+    пауза `pause` с (60) і один повтор. Друга невдача піднімається як є."""
+    try:
+        return request.execute()
+    except HttpError as exc:
+        if not _is_retryable(exc):
+            raise
+        logger.warning("Gmail API: ліміт квоти, пауза %.0f с і один повтор", pause)
+        time.sleep(pause)
+        return request.execute()
 
 
 def _build_query(company_names: list[str]) -> str:
@@ -85,23 +84,36 @@ def get_or_create_label(name: str = GMAIL_LABEL_NAME) -> str:
     return created["id"]
 
 
-def search_threads(company_names: list[str], label_id_to_exclude: str) -> list[dict]:
-    """Повертає список метаданих тредів, які ще НЕ мають лейблу
-    label_id_to_exclude і відповідають трьом умовам з config.GMAIL_KEYWORDS
-    / hr@ / company_names.
-    """
+def search_threads(company_names: list[str], label_id_to_exclude: str,
+                   max_threads: int = GMAIL_MAX_THREADS_PER_RUN) -> list[dict]:
+    """Повертає метадані тредів (не більше max_threads, найновіші першими),
+    які ще НЕ мають лейблу label_id_to_exclude і відповідають трьом умовам з
+    config.GMAIL_KEYWORDS / hr@ / company_names. Кількість знайденого й
+    чи обрізано за лімітом — у лозі."""
     service = gmail_service()
     query = _build_query(company_names) + f" -label:{_label_name_safe(label_id_to_exclude)}"
     threads: list[dict] = []
     page_token: str | None = None
+    truncated = False
     while True:
         resp = _execute(
-            service.users().threads().list(userId="me", q=query, pageToken=page_token, maxResults=50)
+            service.users().threads().list(
+                userId="me", q=query, pageToken=page_token, maxResults=min(50, max_threads - len(threads))
+            )
         )
         threads.extend(resp.get("threads", []))
         page_token = resp.get("nextPageToken")
+        if len(threads) >= max_threads:
+            truncated = bool(page_token)
+            break
         if not page_token:
             break
+    truncated = truncated or len(threads) > max_threads
+    threads = threads[:max_threads]
+    logger.info(
+        "Gmail: запит повернув %d тредів%s (вікно %d дн.)",
+        len(threads), f", ліміт {max_threads} — решту пропущено" if truncated else "", GMAIL_SEARCH_WINDOW_DAYS,
+    )
     return threads
 
 

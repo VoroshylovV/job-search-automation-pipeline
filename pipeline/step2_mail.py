@@ -64,10 +64,16 @@ def run_step2(company_names: list[str] | None = None) -> dict:
     raw_emails: list[dict] = []
     thread_message_ids: list[tuple[str, str]] = []  # (thread_id, message_id) для першого листа треду
 
+    skipped_threads = 0
     for n, t in enumerate(threads):
         if n:
             time.sleep(GMAIL_THREAD_PAUSE_SEC)  # не впиратись у квоту "units per minute"
-        thread = gmail.get_thread(t["id"])
+        try:
+            thread = gmail.get_thread(t["id"])
+        except Exception as exc:  # noqa: BLE001 - один тред не має валити весь Крок 2
+            skipped_threads += 1
+            logger.warning("Тред %s не вдалося завантажити — пропущено: %s", t["id"], exc)
+            continue
         messages = thread.get("messages", [])
         if not messages:
             continue
@@ -81,8 +87,19 @@ def run_step2(company_names: list[str] | None = None) -> dict:
         )
         thread_message_ids.append((t["id"], message["id"]))
 
+    thread_stats = {
+        "threads_found": len(threads),
+        "threads_loaded": len(threads) - skipped_threads,
+        "threads_skipped": skipped_threads,
+    }
+    logger.info(
+        "Крок 2: тредів знайдено %d, завантажено %d, пропущено %d",
+        thread_stats["threads_found"], thread_stats["threads_loaded"], skipped_threads,
+    )
+
     if not raw_emails:
-        return {"findings": [], "total_emails_found": 0, "hr_domain_emails": 0, "known_company_emails": 0}
+        return {"findings": [], "total_emails_found": 0, "hr_domain_emails": 0, "known_company_emails": 0,
+                "company_names": company_names, **thread_stats}
 
     prompt = build_email_classify_prompt(raw_emails)
     result = call_json(prompt)
@@ -121,4 +138,5 @@ def run_step2(company_names: list[str] | None = None) -> dict:
         "hr_domain_emails": sum(1 for f in findings if f.from_hr_domain),
         "known_company_emails": sum(1 for f in findings if f.from_known_company),
         "company_names": company_names,
+        **thread_stats,
     }

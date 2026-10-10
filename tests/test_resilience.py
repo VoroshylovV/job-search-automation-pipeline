@@ -192,23 +192,29 @@ class _Req:
         return self.result
 
 
-def test_gmail_retries_with_exponential_delays(monkeypatch):
+def test_gmail_single_60s_pause_then_retry(monkeypatch):
     sleeps = []
     monkeypatch.setattr(gmail.time, "sleep", sleeps.append)
-    req = _Req([_http_error(403, "rateLimitExceeded"), _http_error(429, "tooManyRequests"), _http_error(403, "userRateLimitExceeded")])
+    req = _Req([_http_error(403, "rateLimitExceeded")])
     assert gmail._execute(req) == "ok"
-    assert sleeps == [1.0, 2.0, 4.0]
-    assert req.calls == 4
+    assert sleeps == [60]
+    assert req.calls == 2
 
 
-def test_gmail_gives_up_after_five_attempts(monkeypatch):
+def test_gmail_429_also_single_pause(monkeypatch):
     sleeps = []
     monkeypatch.setattr(gmail.time, "sleep", sleeps.append)
-    req = _Req([_http_error(429, "x")] * 10)
+    req = _Req([_http_error(429, "tooManyRequests")])
+    assert gmail._execute(req) == "ok" and sleeps == [60]
+
+
+def test_gmail_second_rate_limit_error_is_raised(monkeypatch):
+    sleeps = []
+    monkeypatch.setattr(gmail.time, "sleep", sleeps.append)
+    req = _Req([_http_error(429, "x")] * 5)
     with pytest.raises(HttpError):
         gmail._execute(req)
-    assert req.calls == 5
-    assert sleeps == [1.0, 2.0, 4.0, 8.0]
+    assert req.calls == 2 and sleeps == [60]
 
 
 def test_gmail_does_not_retry_other_403(monkeypatch):
@@ -239,3 +245,90 @@ def test_prompt_rules_from_09_10_log_review():
     assert "Бізнес-аналітик (BA)" in VACANCY_STAGE_FULL and "Match-рівень Low" in VACANCY_STAGE_FULL
     assert "Удаленная работа" in VACANCY_STAGE_FULL and "Віддалена робота" in VACANCY_STAGE_FULL
     assert "BA/операційну аналітику НЕ відсівай" in VACANCY_STAGE_CARD
+
+
+# ---- 6. Крок 2: вікно, ліміт, пропуск тредів, лічильники ---------------------
+
+def test_gmail_query_window_is_two_days():
+    assert "newer_than:2d" in gmail._build_query(["Acme"])
+
+
+def test_search_threads_caps_and_logs(monkeypatch, caplog):
+    pages = [
+        {"threads": [{"id": str(i)} for i in range(30)], "nextPageToken": "p2"},
+        {"threads": [{"id": str(i)} for i in range(30, 60)], "nextPageToken": "p3"},
+    ]
+    seen_max = []
+
+    class _List:
+        def __init__(self, resp):
+            self.resp = resp
+
+        def execute(self):
+            return self.resp
+
+    class _Threads:
+        def list(self, **kw):
+            seen_max.append(kw["maxResults"])
+            return _List(pages.pop(0))
+
+    service = SimpleNamespace(users=lambda: SimpleNamespace(threads=lambda: _Threads()))
+    monkeypatch.setattr(gmail, "gmail_service", lambda: service)
+    with caplog.at_level("INFO"):
+        out = gmail.search_threads([], "label", max_threads=50)
+    assert len(out) == 50
+    assert seen_max == [50, 20]  # другий запит просить лише те, що лишилось до ліміту
+    assert "запит повернув 50 тредів" in caplog.text and "ліміт 50" in caplog.text
+
+
+def _stub_step2(monkeypatch, threads, get_thread):
+    from pipeline import step2_mail
+    monkeypatch.setattr(step2_mail.time, "sleep", lambda s: None)
+    monkeypatch.setattr(step2_mail.gmail, "get_or_create_label", lambda n: "L")
+    monkeypatch.setattr(step2_mail.gmail, "search_threads", lambda c, label_id_to_exclude: threads)
+    monkeypatch.setattr(step2_mail.gmail, "get_thread", get_thread)
+    return step2_mail
+
+
+def test_step2_skips_unloadable_thread_and_reports_counts(monkeypatch, caplog):
+    def get_thread(tid):
+        if tid == "bad":
+            raise RuntimeError("403 quota")
+        return {"messages": []}
+
+    step2 = _stub_step2(monkeypatch, [{"id": "a"}, {"id": "bad"}, {"id": "c"}], get_thread)
+    with caplog.at_level("INFO"):
+        res = step2.run_step2(company_names=[])
+    assert (res["threads_found"], res["threads_loaded"], res["threads_skipped"]) == (3, 2, 1)
+    assert "Тред bad не вдалося завантажити — пропущено" in caplog.text
+    assert "тредів знайдено 3, завантажено 2, пропущено 1" in caplog.text
+
+
+def test_selfcheck_step2_partial_when_threads_skipped():
+    from pipeline.step4_selfcheck import _step2_status
+    status, note = _step2_status({"company_names": [], "threads_found": 5, "threads_skipped": 2})
+    assert status == "ЧАСТКОВО" and "2 з 5" in note
+    assert _step2_status({"company_names": [], "threads_found": 5, "threads_skipped": 0})[0] == "OK"
+
+
+# ---- 7. BA/Ops: Low лише при ≥1 збігу, інакше відсів за "роль" --------------
+
+def test_prompt_ba_ops_requires_skill_match():
+    from claude_orchestrator.prompts import VACANCY_STAGE_FULL
+    assert "ОДИН збіг із навичками кандидата" in VACANCY_STAGE_FULL
+    assert "Нуль збігів" in VACANCY_STAGE_FULL and 'reject_code "роль"' in VACANCY_STAGE_FULL
+    assert "Бізнес-аналітик CRM Dynamics 365" in VACANCY_STAGE_FULL
+
+
+def test_ba_with_zero_skill_matches_rejected_as_role_end_to_end():
+    """Progresia «Бізнес-аналітик CRM Dynamics 365»: модель (за правилом
+    промпту) повертає відсів «роль»; пайплайн має занести його в лог як такий."""
+    job = RawJobPosting(source="work.ua", title="Бізнес-аналітик CRM Dynamics 365", company="Progresia",
+                        url="https://work.ua/jobs/9000001/", posted_raw="", salary_raw="", description_snippet="")
+    ev = {**_ev(0, passes_criteria=False), "reject_code": "роль", "reject_reason": "BA без збігів із навичками"}
+    with patch.object(step1, "_scrape_all", _scrape([job])), \
+         patch.object(step1, "call_json", lambda prompt, **kw: {"evaluations": [ev]}), \
+         patch.object(step1, "_read_dedup_log_with_retry", lambda: (None, "")):
+        res = step1.run_step1(utc_today=TODAY, local_today=TODAY)
+    assert res["vacancies"] == []
+    assert res["decisions"][0]["code"] == "роль"

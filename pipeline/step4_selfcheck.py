@@ -72,6 +72,9 @@ def _step2_status(step2_result: dict) -> tuple[str, str]:
         # збій, могло просто не бути листів; company_names відсутнє лише
         # коли перелік компаній не витягувався взагалі.
         return "ЧАСТКОВО", "не вдалось підтвердити перелік компаній із Drive"
+    skipped = step2_result.get("threads_skipped", 0)
+    if skipped:
+        return "ЧАСТКОВО", f"не вдалося завантажити {skipped} з {step2_result.get('threads_found', '?')} тредів"
     return "OK", ""
 
 
