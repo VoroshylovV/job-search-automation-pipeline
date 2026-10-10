@@ -18,10 +18,12 @@ import sys
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
+from claude_orchestrator.cost import tracker as cost_tracker
 from config import CANDIDATE_LOCAL_TZ, COMPARISON_SHEET_TITLE
 from google_services import notify
 from pipeline.step1_2_freelance import run_step1_2
 from pipeline.step1_vacancies import run_step1
+from pipeline.cost_log import append_cost_row, build_row
 from pipeline.reject_log import write_reject_log
 from pipeline.step2_mail import run_step2
 from pipeline.step3_metrics import run_step3
@@ -180,6 +182,7 @@ def main() -> int:
     # (4.4 і 4.5) — аналог одноразового `date -u` в чат-версії промпту.
     selfcheck_timestamp = utc_now.strftime("%Y-%m-%d %H:%M") + " UTC"
 
+    cost_tracker.reset()  # вартість Claude рахується окремо за кожен запуск
     logger.info("=== Запуск пайплайна: %s (UTC) / %s (%s) ===", utc_today.isoformat(), local_today.isoformat(), CANDIDATE_LOCAL_TZ)
 
     try:
@@ -266,6 +269,13 @@ def main() -> int:
             logger.exception("Крок 5 (порівняння) критично провалився")
             step5_result = {"active": False}
 
+        # Журнал вартості logs/costs.csv (docs/COSTS.md) — окремий try: збій
+        # запису не повинен ховати звіт.
+        try:
+            append_cost_row(build_row(selfcheck_timestamp, step1_result, step4_result["result"], step5_result))
+        except Exception:
+            logger.exception("Запис у logs/costs.csv не вдався")
+
         report = format_report(
             step1_result, step1_2_result, step2_result, step3_result, step4_result, step5_result
         )
@@ -279,6 +289,7 @@ def main() -> int:
         # Наприкінці — push-повідомлення, БЕЗУМОВНО (навіть якщо щось вище
         # провалилось): Володимир хоче знати, коли звіт готовий для
         # перегляду, незалежно від того, чи є в ньому щось "цікаве".
+        logger.info("Вартість Claude за запуск: $%.4f (%d викликів)", cost_tracker.total_usd, cost_tracker.calls)
         notify.send_push()
 
     return 0

@@ -314,7 +314,9 @@ def _evaluate_batch(chunk: list[RawJobPosting], today: date, stage: str,
     батча лишаються неоціненими, решту Кроку 1 це не валить)."""
     prompt = build_vacancy_eval_prompt(chunk, today=today, stage=stage, full_texts=chunk_texts)
     try:
-        response = call_json(prompt, max_tokens=CLAUDE_EVAL_MAX_TOKENS)
+        response = call_json(
+            prompt, max_tokens=CLAUDE_EVAL_MAX_TOKENS, stage="fulltext" if stage == "full" else "cards"
+        )
     except ClaudeTruncatedError:
         if len(chunk) == 1:
             logger.error("Відповідь Claude обрізана навіть для однієї вакансії — не оцінено")
@@ -398,6 +400,7 @@ def run_step1(utc_today: date | None = None, local_today: date | None = None) ->
         "unknown_date_note": "",
         "decisions": [],
         "unevaluated_count": 0,
+        "evaluated_count": 0,
     }
     if not raw_jobs:
         return empty_result
@@ -469,6 +472,8 @@ def run_step1(utc_today: date | None = None, local_today: date | None = None) ->
 
     # Етап 1: картка (грубе сито). Етап 2: повний текст — вирішальний.
     eval_by_index = _evaluate(jobs_to_evaluate, local_today, "card")
+    # «Оцінено» для журналу вартості: вакансії, що реально отримали оцінку етапу 1.
+    evaluated_count = sum(1 for ev in eval_by_index.values() if not ev.get("eval_failed"))
     stage1_passed = [i for i in range(len(jobs_to_evaluate))
                      if eval_by_index.get(i) and eval_by_index[i].get("passes_criteria")]
     stage2_evals, full_text_ok = _confirm_with_full_text(
@@ -623,4 +628,5 @@ def run_step1(utc_today: date | None = None, local_today: date | None = None) ->
         "unknown_date_note": unknown_date_note,
         "decisions": decisions,
         "unevaluated_count": unevaluated_count,
+        "evaluated_count": evaluated_count,
     }

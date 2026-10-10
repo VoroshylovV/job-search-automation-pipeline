@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 
+from claude_orchestrator.cost import STAGES, STAGE_TITLES, tracker as cost_tracker
 from config import (
     LOW_MATCH_STREAK_HEURISTIC_RUNS,
     RESUME_FOLDER_ID,
@@ -62,6 +63,16 @@ def _step1_status(step1_result: dict) -> tuple[str, str]:
     else:
         status = "ЧАСТКОВО"
     return status, "; ".join(notes)
+
+
+def cost_note() -> str:
+    """Підсумок вартості Claude за запуск (з usage відповідей) — у «Примітки»:
+    разом і по етапах."""
+    parts = [f"{STAGE_TITLES[name]} ${cost_tracker.stage(name).usd:.3f}" for name in STAGES]
+    other = cost_tracker.stage("other").usd
+    if other:
+        parts.append(f"{STAGE_TITLES['other']} ${other:.3f}")
+    return f"Вартість Claude: ${cost_tracker.total_usd:.3f} ({cost_tracker.calls} викликів): " + ", ".join(parts)
 
 
 def _step2_status(step2_result: dict) -> tuple[str, str]:
@@ -227,6 +238,7 @@ def run_step4(
         low_match_streak_signal=False,  # оновиться нижче, після читання історії
         step1_2_status=step1_2_status,
         step1_2_note=step1_2_note,
+        notes=cost_note(),
     )
 
     saved = False
@@ -261,6 +273,8 @@ def format_selfcheck_block(result: SelfCheckResult) -> str:
         f"Крок 1.2 (фріланс): {result.step1_2_status}"
         + (f" — {result.step1_2_note}" if result.step1_2_note else " — без зауважень"),
     ]
+    if result.notes:
+        lines.append(result.notes)
     if result.low_match_streak_signal:
         lines.append(
             f"⚠️ Сигнал (евристика): {LOW_MATCH_STREAK_HEURISTIC_RUNS}+ запуски поспіль лише "

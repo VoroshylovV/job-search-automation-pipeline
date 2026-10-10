@@ -182,6 +182,8 @@ class RunMetrics:
     known_company_emails: int = 0
     source_statuses: dict[str, str] = field(default_factory=dict)
     notes: str = ""
+    cost_total_usd: float = 0.0  # вартість Claude за запуск, USD
+    cost_per_shown_usd: Optional[float] = None  # None -> "н/д" (нічого не показано)
 
     def as_row(self) -> list:
         s = self.source_statuses
@@ -201,6 +203,8 @@ class RunMetrics:
             s.get("work.ua", "OK"),
             s.get("happymonday.ua", "OK"),
             self.notes or "без зауважень",
+            round(self.cost_total_usd, 4),
+            "н/д" if self.cost_per_shown_usd is None else round(self.cost_per_shown_usd, 4),
         ]
 
 
@@ -220,6 +224,8 @@ METRICS_HEADER = [
     "Статус work.ua",
     "Статус happymonday.ua",
     "Примітки",
+    "Вартість Claude, $ разом",
+    "Вартість Claude, $ на показану вакансію",
 ]
 
 

@@ -7,6 +7,7 @@ import logging
 
 import anthropic
 
+from claude_orchestrator.cost import tracker
 from config import ANTHROPIC_API_KEY, CLAUDE_MODEL
 
 logger = logging.getLogger(__name__)
@@ -29,8 +30,11 @@ def _client() -> anthropic.Anthropic:
     return anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
 
 
-def call_json(prompt: str, *, max_tokens: int = 8000, retries: int = 1) -> dict:
+def call_json(prompt: str, *, max_tokens: int = 8000, retries: int = 1, stage: str = "other") -> dict:
     """Викликає Claude з prompt, очікує JSON-відповідь, повертає dict.
+
+    stage — етап обліку вартості (cards | fulltext | freelance | mail | other),
+    див. claude_orchestrator/cost.py.
 
     При невалідному JSON — один повторний виклик з жорсткішою вимогою
     ("поверни ЛИШЕ JSON, без жодного тексту навколо").
@@ -45,6 +49,7 @@ def call_json(prompt: str, *, max_tokens: int = 8000, retries: int = 1) -> dict:
             max_tokens=max_tokens,
             messages=[{"role": "user", "content": current_prompt}],
         )
+        tracker.record(CLAUDE_MODEL, getattr(message, "usage", None), stage)
         if getattr(message, "stop_reason", None) == "max_tokens":
             # Обрізаний JSON не парситься, а повтор того самого запиту дасть
             # те саме — тому окрема помилка, а не "невалідний JSON".

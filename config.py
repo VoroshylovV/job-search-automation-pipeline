@@ -351,3 +351,21 @@ EMAIL_STATUS_OPTIONS = (
 # допомагали). Плюс невелика пауза між threads.get.
 GMAIL_RATE_LIMIT_PAUSE_SEC = 60
 GMAIL_THREAD_PAUSE_SEC = 0.2
+
+# --------------------------------------------------------------------------
+# Вартість Claude (облік за usage кожної відповіді, claude_orchestrator/cost.py)
+# --------------------------------------------------------------------------
+# USD за 1 млн токенів: (вхід, вихід) за родиною моделі (підрядок назви
+# моделі). Це оцінка для бюджету — ПЕРЕВІР актуальні ціни на
+# https://www.anthropic.com/pricing. Невідома модель рахується за
+# найдорожчою родиною (консервативно).
+MODEL_PRICES_PER_MTOK = {
+    "haiku": (1.0, 5.0),
+    "sonnet": (3.0, 15.0),
+    "opus": (5.0, 25.0),
+}
+FALLBACK_PRICE_PER_MTOK = (5.0, 25.0)
+CACHE_WRITE_MULTIPLIER = 1.25  # запис у prompt cache (TTL 5 хв) = 1.25x ціни входу
+CACHE_READ_MULTIPLIER = 0.10   # читання з кешу = 0.1x ціни входу
+# Журнал вартості: один рядок на запуск, дописується (docs/COSTS.md).
+COSTS_CSV_PATH = "logs/costs.csv"

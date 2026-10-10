@@ -102,7 +102,7 @@ def run_step2(company_names: list[str] | None = None) -> dict:
                 "company_names": company_names, **thread_stats}
 
     prompt = build_email_classify_prompt(raw_emails)
-    result = call_json(prompt)
+    result = call_json(prompt, stage="mail")
     eval_by_index = {ev["index"]: ev for ev in result.get("evaluations", [])}
 
     company_names_lower = {c.lower() for c in company_names}
