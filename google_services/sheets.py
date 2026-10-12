@@ -117,6 +117,27 @@ def read_column_by_header(spreadsheet_id: str, column_header: str) -> list[str]:
     return values
 
 
+def read_rows_by_headers(spreadsheet_id: str, column_headers: list[str]) -> list[dict[str, str]]:
+    """Рядки даних як {заголовок: значення} для вказаних колонок. Колонки,
+    яких немає в таблиці, дають порожні значення; якщо немає жодної —
+    повертає []. Порожні рядки (усі значення порожні) пропускаються."""
+    rows = read_values(spreadsheet_id)
+    located = {h: find_header_row(rows, h) for h in column_headers}
+    found = [v for v in located.values() if v is not None]
+    if not found:
+        return []
+    header_row_idx = max(r for r, _ in found)
+    out: list[dict[str, str]] = []
+    for row in rows[header_row_idx + 1:]:
+        rec = {
+            h: (row[loc[1]].strip() if loc and loc[1] < len(row) else "")
+            for h, loc in located.items()
+        }
+        if any(rec.values()):
+            out.append(rec)
+    return out
+
+
 HEADER_SEARCH_ROWS = 5
 
 

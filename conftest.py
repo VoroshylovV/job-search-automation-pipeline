@@ -15,11 +15,11 @@ import pytest
 @pytest.fixture(autouse=True)
 def _no_real_tracker_read(monkeypatch):
     """Крок 1 при робочому лозі додатково читає URL таблиці відгуків
-    (_applied_urls) — у тестах це мав би бути реальний Google API. Порожня
+    (_read_tracker_rows) — у тестах це мав би бути реальний Google API. Порожня
     множина за замовчуванням; окремі тести перевизначають її явно."""
     from pipeline import step1_vacancies
 
-    monkeypatch.setattr(step1_vacancies, "_applied_urls", lambda: set())
+    monkeypatch.setattr(step1_vacancies, "_read_tracker_rows", lambda: [])
 
 
 @pytest.fixture(autouse=True)

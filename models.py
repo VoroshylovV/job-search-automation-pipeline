@@ -39,6 +39,10 @@ class ScoredVacancy:
     low_match_location_reason: str
     posted_date: Optional[str]  # ISO-дата, або None якщо невизначена
     date_undetermined: bool
+    # Прапорець «Компанія вже в таблиці: <статус>» (компанія є в таблиці
+    # відгуків під іншою посадою/URL) — вакансія показується, не відсіюється.
+    company_flag: str = ""
+    card_only: bool = False  # повну сторінку не отримано — Match не вище Medium
 
     def dedup_key(self) -> str:
         if self.url:
@@ -178,6 +182,8 @@ class RunMetrics:
     known_company_emails: int = 0
     source_statuses: dict[str, str] = field(default_factory=dict)
     notes: str = ""
+    cost_total_usd: float = 0.0  # вартість Claude за запуск, USD
+    cost_per_shown_usd: Optional[float] = None  # None -> "н/д" (нічого не показано)
 
     def as_row(self) -> list:
         s = self.source_statuses
@@ -197,6 +203,8 @@ class RunMetrics:
             s.get("work.ua", "OK"),
             s.get("happymonday.ua", "OK"),
             self.notes or "без зауважень",
+            round(self.cost_total_usd, 4),
+            "н/д" if self.cost_per_shown_usd is None else round(self.cost_per_shown_usd, 4),
         ]
 
 
@@ -216,6 +224,8 @@ METRICS_HEADER = [
     "Статус work.ua",
     "Статус happymonday.ua",
     "Примітки",
+    "Вартість Claude, $ разом",
+    "Вартість Claude, $ на показану вакансію",
 ]
 
 

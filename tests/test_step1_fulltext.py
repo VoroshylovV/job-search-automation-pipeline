@@ -63,7 +63,7 @@ def _run(jobs, call_json, full_text=lambda job: None, real=True):
 def test_seniority_title_is_rejected_before_claude():
     calls = []
 
-    def cj(prompt):
+    def cj(prompt, **kw):
         calls.append(prompt)
         return {"evaluations": []}
 
@@ -75,7 +75,7 @@ def test_seniority_title_is_rejected_before_claude():
 
 
 def test_job_without_url_is_not_shown():
-    res = _run([_job(0, url=False)], lambda p: {"evaluations": [_ev(0)]}, real=False)
+    res = _run([_job(0, url=False)], lambda p, **kw: {"evaluations": [_ev(0)]}, real=False)
     assert res["vacancies"] == []
     assert res["decisions"][0]["detail"] == "немає URL вакансії"
 
@@ -86,7 +86,8 @@ def test_stage2_full_text_overrides_card(monkeypatch):
     monkeypatch.setattr(step1, "_confirm_with_full_text", _REAL_STAGE2)
     prompts = []
 
-    def cj(prompt):
+    def cj(prompt, **kw):
+        prompt = kw.get("cache_prefix", "") + prompt  # статична частина йде окремо (prompt caching)
         prompts.append(prompt)
         if "ЕТАП 2 з 2" in prompt:
             return {"evaluations": [_ev(0, passes=False, code="формат")]}
@@ -102,7 +103,7 @@ def test_stage2_full_text_overrides_card(monkeypatch):
 
 def test_stage2_shown_marks_source_of_text(monkeypatch):
     monkeypatch.setattr(step1, "_confirm_with_full_text", _REAL_STAGE2)
-    res = _run([_job(0), _job(1)], lambda p: {"evaluations": [_ev(0), _ev(1)]},
+    res = _run([_job(0), _job(1)], lambda p, **kw: {"evaluations": [_ev(0), _ev(1)]},
                full_text=lambda job: ("Повністю віддалено. " * 20) if job.url.endswith("1000") else None,
                real=False)
     details = sorted(d["detail"] for d in res["decisions"])

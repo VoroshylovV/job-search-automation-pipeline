@@ -231,7 +231,7 @@ def run_step1_2(utc_today: date | None = None, local_today: date | None = None) 
         for start in range(0, len(projects_to_evaluate), CLAUDE_EVAL_CHUNK_SIZE):
             chunk = projects_to_evaluate[start : start + CLAUDE_EVAL_CHUNK_SIZE]
             prompt = build_freelance_eval_prompt(chunk, today=local_today)
-            result = call_json(prompt)
+            result = call_json(prompt, stage="freelance")
             for ev in result.get("evaluations", []):
                 ev["raw_index"] += start
             evaluations.extend(result.get("evaluations", []))

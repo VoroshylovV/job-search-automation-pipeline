@@ -17,7 +17,9 @@ from __future__ import annotations
 
 import logging
 
+from claude_orchestrator.cost import STAGES, STAGE_TITLES, tracker as cost_tracker
 from config import (
+    MAX_RUN_COST_USD,
     LOW_MATCH_STREAK_HEURISTIC_RUNS,
     RESUME_FOLDER_ID,
     SELFCHECK_SHEET_TITLE,
@@ -36,26 +38,51 @@ TRACKER_NOT_IMPLEMENTED_NOTE = (
 
 
 def _step1_status(step1_result: dict) -> tuple[str, str]:
+    """«Джерел перевірено» рахується за ФАКТИЧНИМ збором (source_statuses),
+    а не за успіхом оцінки Claude; невдала оцінка пишеться окремо —
+    «оцінку не виконано»."""
     statuses = step1_result.get("source_statuses", {})
     ok_count = sum(1 for s in statuses.values() if s.status == "OK")
     total = len(statuses) or 5
     dedup_level = step1_result.get("dedup_level_used", 0)
+    unevaluated = step1_result.get("unevaluated_count", 0)
 
     notes = []
     if ok_count < total:
         notes.append(f"джерел перевірено {ok_count}/{total}")
+    if unevaluated:
+        notes.append(f"оцінку не виконано для {unevaluated} вакансій (помилка Claude)")
+    budget_skipped = step1_result.get("budget_unevaluated_count", 0)
+    if budget_skipped:
+        notes.append(f"{budget_skipped} вакансій не оцінено (ліміт бюджету)")
+    capped = step1_result.get("stage2_capped_count", 0)
+    if capped:
+        notes.append(f"{capped} вакансій не оцінено (ліміт етапу 2)")
     if dedup_level == 0:
         notes.append("дедублікація не виконана (обидва рівні недоступні)")
     elif dedup_level == 2:
         notes.append("спрацював лише рівень 2 дедублікації (таблиця відгуків)")
 
-    if ok_count == total and dedup_level in (1, 2):
-        status = "OK" if dedup_level == 1 else "ЧАСТКОВО"
-    elif ok_count == 0:
+    if ok_count == 0:
         status = "НЕ ВИКОНАНО"
+    elif ok_count == total and dedup_level in (1, 2) and not (unevaluated or budget_skipped or capped):
+        status = "OK" if dedup_level == 1 else "ЧАСТКОВО"
     else:
         status = "ЧАСТКОВО"
     return status, "; ".join(notes)
+
+
+def cost_note() -> str:
+    """Підсумок вартості Claude за запуск (з usage відповідей) — у «Примітки»:
+    разом і по етапах."""
+    parts = [f"{STAGE_TITLES[name]} ${cost_tracker.stage(name).usd:.3f}" for name in STAGES]
+    other = cost_tracker.stage("other").usd
+    if other:
+        parts.append(f"{STAGE_TITLES['other']} ${other:.3f}")
+    return (
+        f"Вартість Claude: ${cost_tracker.total_usd:.3f} (ліміт ${MAX_RUN_COST_USD:.2f}, "
+        f"{cost_tracker.calls} викликів): " + ", ".join(parts)
+    )
 
 
 def _step2_status(step2_result: dict) -> tuple[str, str]:
@@ -66,6 +93,9 @@ def _step2_status(step2_result: dict) -> tuple[str, str]:
         # збій, могло просто не бути листів; company_names відсутнє лише
         # коли перелік компаній не витягувався взагалі.
         return "ЧАСТКОВО", "не вдалось підтвердити перелік компаній із Drive"
+    skipped = step2_result.get("threads_skipped", 0)
+    if skipped:
+        return "ЧАСТКОВО", f"не вдалося завантажити {skipped} з {step2_result.get('threads_found', '?')} тредів"
     return "OK", ""
 
 
@@ -181,11 +211,21 @@ def run_step4(
     shown = len(step1_result.get("vacancies", []))
     conversion_pct = _conversion_pct(total_found, shown)
 
-    trend_comparable = sources_ok_count == 5
-    trend_reason = "" if trend_comparable else f"джерел перевірено {sources_ok_count}/5, а не 5/5"
+    unevaluated = (
+        step1_result.get("unevaluated_count", 0)
+        + step1_result.get("budget_unevaluated_count", 0)
+        + step1_result.get("stage2_capped_count", 0)
+    )
+    trend_comparable = sources_ok_count == 5 and not unevaluated
+    if sources_ok_count != 5:
+        trend_reason = f"джерел перевірено {sources_ok_count}/5, а не 5/5"
+    elif unevaluated:
+        trend_reason = f"оцінку не виконано для {unevaluated} вакансій"
+    else:
+        trend_reason = ""
 
     vacancies = step1_result.get("vacancies", [])
-    full_coverage = sources_ok_count == 5
+    full_coverage = sources_ok_count == 5 and not unevaluated
     if not full_coverage:
         only_low_or_zero = "н/д"
     elif not vacancies:
@@ -212,6 +252,7 @@ def run_step4(
         low_match_streak_signal=False,  # оновиться нижче, після читання історії
         step1_2_status=step1_2_status,
         step1_2_note=step1_2_note,
+        notes=cost_note(),
     )
 
     saved = False
@@ -246,6 +287,8 @@ def format_selfcheck_block(result: SelfCheckResult) -> str:
         f"Крок 1.2 (фріланс): {result.step1_2_status}"
         + (f" — {result.step1_2_note}" if result.step1_2_note else " — без зауважень"),
     ]
+    if result.notes:
+        lines.append(result.notes)
     if result.low_match_streak_signal:
         lines.append(
             f"⚠️ Сигнал (евристика): {LOW_MATCH_STREAK_HEURISTIC_RUNS}+ запуски поспіль лише "

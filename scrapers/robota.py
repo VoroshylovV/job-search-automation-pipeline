@@ -90,6 +90,16 @@ def _parse_html_cards(soup: BeautifulSoup) -> Iterator[RawJobPosting]:
         )
 
 
+def human_url(notebook_id, vacancy_id) -> str:
+    """Людське посилання `https://robota.ua/company<notebookId>/vacancy<id>`.
+    Саме його виводимо користувачу, пишемо в логи й таблицю відгуків; сире
+    посилання API (api.robota.ua/vacancy?id=…) використовується лише для
+    читання тексту (scrapers/detail.py) і ніколи не стає RawJobPosting.url."""
+    if notebook_id:
+        return f"{BASE_URL}/company{notebook_id}/vacancy{vacancy_id}"
+    return f"{BASE_URL}/vacancy{vacancy_id}"
+
+
 def _api_doc_to_job(doc: dict) -> RawJobPosting | None:
     """Один документ відповіді API: {id, name, companyName, notebookId,
     date, cityName, salary, shortDescription, ...}."""
@@ -97,12 +107,7 @@ def _api_doc_to_job(doc: dict) -> RawJobPosting | None:
     title = str(doc.get("name") or "").strip()
     if not vacancy_id or not title:
         return None
-    notebook_id = doc.get("notebookId")
-    url = (
-        f"{BASE_URL}/company{notebook_id}/vacancy{vacancy_id}"
-        if notebook_id
-        else f"{BASE_URL}/vacancy{vacancy_id}"
-    )
+    url = human_url(doc.get("notebookId"), vacancy_id)
     salary = doc.get("salary")
     salary_raw = str(salary) if salary not in (None, 0, "0", "") else ""
     city = str(doc.get("cityName") or "")
