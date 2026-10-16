@@ -23,6 +23,56 @@ scheduled-задачі. Той самий "мозок" (Claude оцінює ва
 результату". Повний розбір, другий графік і важливе уточнення про джерело
 цих даних — **[docs/sample-run.md](docs/sample-run.md)**.
 
+## Архітектура
+
+```mermaid
+flowchart LR
+    subgraph SRC["Джерела вакансій"]
+        S1[Djinni]
+        S2[DOU]
+        S3[Robota]
+        S4[Work.ua]
+        S5[HappyMonday]
+    end
+
+    subgraph P1["Крок 1. Вакансії"]
+        SC["Scrapers<br/>перша сторінка видачі"]
+        DD["Дедуплікація<br/>вікно 21 день"]
+        DT["Фільтр за датою<br/>час Варшави"]
+        CL1["Claude API<br/>оцінка релевантності<br/>батчі ~40"]
+    end
+
+    subgraph P2["Крок 2. Пошта"]
+        GM[Gmail]
+        RX["Python regex<br/>HR-домени, список компаній"]
+        CL2["Claude API<br/>класифікація листів"]
+    end
+
+    M["Крок 3. Метрики<br/>лічильники в Python, не в LLM"]
+    CHK["Крок 4. Self-check<br/>OK / PARTIAL / NOT DONE"]
+
+    subgraph OUT["Результат"]
+        DOC[Google Docs]
+        SHT[Google Sheets]
+        RPT["reports/report_дата.md"]
+        PUSH["Push через ntfy.sh"]
+    end
+
+    LOG[("Лог запусків<br/>історія для дедуплікації й self-check")]
+
+    SRC --> SC --> DD --> DT --> CL1
+    GM --> RX --> CL2
+    CL1 --> M
+    CL2 --> M
+    M --> CHK
+    CHK --> DOC
+    CHK --> SHT
+    CHK --> RPT
+    CHK --> PUSH
+    LOG <--> DD
+    LOG --> CHK
+```
+
 ## Структура
 
 ```
