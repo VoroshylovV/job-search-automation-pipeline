@@ -23,101 +23,63 @@ scheduled-задачі. Той самий "мозок" (Claude оцінює ва
 результату". Повний розбір, другий графік і важливе уточнення про джерело
 цих даних — **[docs/sample-run.md](docs/sample-run.md)**.
 
-flowchart TD
-    %% Стилізація для кращого візуального сприйняття
-    classDef storage fill:#f9f,stroke:#333,stroke-width:2px;
-    classDef ai fill:#bbf,stroke:#333,stroke-width:2px;
-    classDef Step fill:#fff,stroke:#333,stroke-width:1px,stroke-dasharray: 5 5;
+## Архітектура
 
-    %% Контур джерел
-    subgraph SRC["Вхідні дані та Джерела"]
-        subgraph SRC_V["Робота (Крок 1)"]
-            S1[Djinni]
-            S2[DOU]
-            S3[Robota.ua]
-            S4[Work.ua]
-            S5[HappyMonday]
-        end
-        subgraph SRC_F["Фріланс (Крок 1.2)"]
-            F1[Freelancehunt API/HTML]
-            F2[Telegram Channels preview]
-        end
-        GM[Gmail API — Листи рекрутерів Крок 2]
+Кожен крок запускається незалежно й має власний `try/except`: збій одного кроку не зупиняє інші.
+
+```mermaid
+flowchart TB
+    START([Запуск main.py]) --> S1 & S12 & S2
+
+    subgraph S1["Крок 1. Вакансії"]
+        direction LR
+        SC["Scrapers<br/>Djinni, DOU, Robota, Work.ua, HappyMonday"] --> DD["Дедуплікація 21 день<br/>фільтр за датою"] --> C1["Claude API<br/>оцінка релевантності"]
     end
 
-    %% Контур обробки Вакансій
-    subgraph P1["Пайплайн Вакансій"]
-        SC_V["Scrapers<br/>curl_cffi / requests"]
-        DD_V["Дворівневий Дедуп<br/>вікно 21 день"]
-        DT_V["Фільтр дат & Рівнів<br/>Europe/Warsaw"]
-        CL_V["Claude API<br/>Match Scoring (JSON Schema)"]
-        
-        SC_V --> DD_V --> DT_V --> CL_V
+    subgraph S12["Крок 1.2. Фріланс"]
+        direction LR
+        FH["Freelancehunt<br/>API або HTML"] --> C12["Claude API"]
+        TG["Telegram-канал<br/>публічне прев'ю"] --> C12
     end
 
-    %% Контур обробки Фрілансу
-    subgraph P12["Пайплайн Фрілансу"]
-        SC_F["Scrapers<br/>API / HTML"]
-        DD_F["Дедуплікація<br/>вікно 10 днів"]
-        CL_F["Claude API<br/>Бінарна релевантність"]
-        
-        SC_F --> DD_F --> CL_F
+    subgraph S2["Крок 2. Пошта"]
+        direction LR
+        GM[Gmail] --> RX["regex: HR-домени,<br/>список компаній"] --> C2["Claude API<br/>класифікація листів"]
     end
 
-    %% Контур обробки пошти
-    subgraph P2["Пайплайн Пошти"]
-        RX["Python Regex<br/>HR-домени & Компанії"]
-        CL_M["Claude API<br/>Класифікація відповідей"]
-        
-        RX --> CL_M
+    C1 --> S3
+    C12 --> S4
+    C2 --> S3
+
+    subgraph S3["Крок 3. Метрики й трекер"]
+        direction LR
+        M["Лічильники в Python"]
+        T["Оновлення таблиці відгуків<br/>відмова або запрошення"]
     end
 
-    %% Центральний оркестратор та валідація
-    M["Крок 3. Розрахунок метрик<br/>(Детермінований len() у Python)"]
-    TRK["Крок 3. Tracker<br/>Автооновлення статусів"]
-    CHK["Крок 4. Self-Check<br/>Контроль лічильників & Аудит"]
-    CMP["Крок 5. Звірення версій<br/>(Перетин URL з Чат-версією)"]
+    S3 --> S4["Крок 4. Self-check<br/>OK / PARTIAL / NOT DONE"]
+    S4 --> S5["Крок 5. Порівняння<br/>чат-версія і Python"]
+    S1 & S12 --> S5
 
-    %% База даних / Логи
-    LOG[("Логи запусків & Дублів<br/>(reports/, logs/pipeline.log)")]:::storage
+    DLOG[("Drive: дедуп-логи<br/>вакансії, фріланс")]
+    RLOG[("reject_log<br/>причини відсіву за URL")]
+    SM[("Sheets: Метрики автопошуку")]
+    SC4[("Sheets: Результат щоденної перевірки")]
+    SC5[("Sheets: Порівняльна таблиця")]
+    TR[("Sheets: таблиця відгуків")]
 
-    %% Шар виводу результатів
-    subgraph OUT["Контур сповіщення та збереження"]
-        DOC[Google Docs]
-        SHT[(Google Sheets<br/>Метрики / Трекер)]:::storage
-        RPT["reports/report_дата.md"]
-        PUSH["Push через ntfy.sh"]
-    end
+    S1 <--> DLOG
+    S12 <--> DLOG
+    S1 --> RLOG
+    M --> SM
+    T --> TR
+    S4 --> SC4
+    S5 --> SC5
+    RLOG -.-> S5
 
-    %% Зв'язки між джерелами та пайплайнами (Паралельний запуск)
-    SRC_V --> SC_V
-    SRC_F --> SC_F
-    GM --> RX
-
-    %% Збирання даних в оркестратор
-    CL_V --> M
-    CL_F --> M
-    CL_M --> TRK
-    
-    %% Оновлення трекера відгуків на основі пошти
-    TRK -->|Запис відмов/запрошень| SHT
-
-    %% Контур перевірки якості даних
-    M --> CHK
-    LOG <--> DD_V
-    LOG <--> DD_F
-    LOG --> CHK
-    CHK --> CMP
-
-    %% Вивід фінальних результатів
-    CMP --> DOC
-    CMP --> SHT
-    CMP --> RPT
-    CMP --> PUSH
-
-    %% Застосування стилів до ШІ блоків
-    class CL_V,CL_F,CL_M ai;
-    class P1,P12,P2 Step;
+    S5 --> REP["reports/report_дата.md"]
+    S5 --> PUSH["ntfy.sh push<br/>завжди, у finally"]
+```
 
 
 ## Структура
