@@ -23,55 +23,102 @@ scheduled-задачі. Той самий "мозок" (Claude оцінює ва
 результату". Повний розбір, другий графік і важливе уточнення про джерело
 цих даних — **[docs/sample-run.md](docs/sample-run.md)**.
 
-## Архітектура
+flowchart TD
+    %% Стилізація для кращого візуального сприйняття
+    classDef storage fill:#f9f,stroke:#333,stroke-width:2px;
+    classDef ai fill:#bbf,stroke:#333,stroke-width:2px;
+    classDef Step fill:#fff,stroke:#333,stroke-width:1px,stroke-dasharray: 5 5;
 
-```mermaid
-flowchart LR
-    subgraph SRC["Джерела вакансій"]
-        S1[Djinni]
-        S2[DOU]
-        S3[Robota]
-        S4[Work.ua]
-        S5[HappyMonday]
+    %% Контур джерел
+    subgraph SRC["Вхідні дані та Джерела"]
+        subgraph SRC_V["Робота (Крок 1)"]
+            S1[Djinni]
+            S2[DOU]
+            S3[Robota.ua]
+            S4[Work.ua]
+            S5[HappyMonday]
+        end
+        subgraph SRC_F["Фріланс (Крок 1.2)"]
+            F1[Freelancehunt API/HTML]
+            F2[Telegram Channels preview]
+        end
+        GM[Gmail API — Листи рекрутерів Крок 2]
     end
 
-    subgraph P1["Крок 1. Вакансії"]
-        SC["Scrapers<br/>перша сторінка видачі"]
-        DD["Дедуплікація<br/>вікно 21 день"]
-        DT["Фільтр за датою<br/>час Варшави"]
-        CL1["Claude API<br/>оцінка релевантності<br/>батчі ~40"]
+    %% Контур обробки Вакансій
+    subgraph P1["Пайплайн Вакансій"]
+        SC_V["Scrapers<br/>curl_cffi / requests"]
+        DD_V["Дворівневий Дедуп<br/>вікно 21 день"]
+        DT_V["Фільтр дат & Рівнів<br/>Europe/Warsaw"]
+        CL_V["Claude API<br/>Match Scoring (JSON Schema)"]
+        
+        SC_V --> DD_V --> DT_V --> CL_V
     end
 
-    subgraph P2["Крок 2. Пошта"]
-        GM[Gmail]
-        RX["Python regex<br/>HR-домени, список компаній"]
-        CL2["Claude API<br/>класифікація листів"]
+    %% Контур обробки Фрілансу
+    subgraph P12["Пайплайн Фрілансу"]
+        SC_F["Scrapers<br/>API / HTML"]
+        DD_F["Дедуплікація<br/>вікно 10 днів"]
+        CL_F["Claude API<br/>Бінарна релевантність"]
+        
+        SC_F --> DD_F --> CL_F
     end
 
-    M["Крок 3. Метрики<br/>лічильники в Python, не в LLM"]
-    CHK["Крок 4. Self-check<br/>OK / PARTIAL / NOT DONE"]
+    %% Контур обробки пошти
+    subgraph P2["Пайплайн Пошти"]
+        RX["Python Regex<br/>HR-домени & Компанії"]
+        CL_M["Claude API<br/>Класифікація відповідей"]
+        
+        RX --> CL_M
+    end
 
-    subgraph OUT["Результат"]
+    %% Центральний оркестратор та валідація
+    M["Крок 3. Розрахунок метрик<br/>(Детермінований len() у Python)"]
+    TRK["Крок 3. Tracker<br/>Автооновлення статусів"]
+    CHK["Крок 4. Self-Check<br/>Контроль лічильників & Аудит"]
+    CMP["Крок 5. Звірення версій<br/>(Перетин URL з Чат-версією)"]
+
+    %% База даних / Логи
+    LOG[("Логи запусків & Дублів<br/>(reports/, logs/pipeline.log)")]:::storage
+
+    %% Шар виводу результатів
+    subgraph OUT["Контур сповіщення та збереження"]
         DOC[Google Docs]
-        SHT[Google Sheets]
+        SHT[(Google Sheets<br/>Метрики / Трекер)]:::storage
         RPT["reports/report_дата.md"]
         PUSH["Push через ntfy.sh"]
     end
 
-    LOG[("Лог запусків<br/>історія для дедуплікації й self-check")]
+    %% Зв'язки між джерелами та пайплайнами (Паралельний запуск)
+    SRC_V --> SC_V
+    SRC_F --> SC_F
+    GM --> RX
 
-    SRC --> SC --> DD --> DT --> CL1
-    GM --> RX --> CL2
-    CL1 --> M
-    CL2 --> M
+    %% Збирання даних в оркестратор
+    CL_V --> M
+    CL_F --> M
+    CL_M --> TRK
+    
+    %% Оновлення трекера відгуків на основі пошти
+    TRK -->|Запис відмов/запрошень| SHT
+
+    %% Контур перевірки якості даних
     M --> CHK
-    CHK --> DOC
-    CHK --> SHT
-    CHK --> RPT
-    CHK --> PUSH
-    LOG <--> DD
+    LOG <--> DD_V
+    LOG <--> DD_F
     LOG --> CHK
-```
+    CHK --> CMP
+
+    %% Вивід фінальних результатів
+    CMP --> DOC
+    CMP --> SHT
+    CMP --> RPT
+    CMP --> PUSH
+
+    %% Застосування стилів до ШІ блоків
+    class CL_V,CL_F,CL_M ai;
+    class P1,P12,P2 Step;
+
 
 ## Структура
 
