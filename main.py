@@ -63,8 +63,12 @@ _root_logger.addHandler(_file_handler)
 logger = logging.getLogger("main")
 
 
+_FREELANCE_SOURCE_LABEL = {"freelancehunt.com": "Freelancehunt", "telegram": "Telegram"}
+
+
 def _format_freelance_project(v) -> list[str]:
-    lines = [f"- **{v.title}** | {v.category} | [{v.source}]({v.url})"]
+    label = _FREELANCE_SOURCE_LABEL.get(v.source, v.source)
+    lines = [f"- **{v.title}** | {v.category} | [{label}]({v.url})"]
     if v.competition_level:
         lines.append(f"  - Кількість ставок: {v.bids_count} ({v.competition_level} конкуренція)")
     lines.append(f"  - Бюджет: {v.budget_raw or 'не вказано'}")
@@ -91,26 +95,36 @@ def format_report(
         for v in vacancies:
             lines.append(f"- **{v.title}** | {v.company} | [{v.source}]({v.url or 'н/д'})")
             lines.append(f"  - Match-рівень: {v.match_level}")
-            lines.append(f"  - Оцінка відповідності: {v.match_reasoning}")
+            # Позначки — у «Оцінка відповідності», як в онлайн-промпті (Крок 1 п.2, Правило И).
+            marks = list(v.flags) + (["лише картка"] if v.card_only else [])
+            reasoning = v.match_reasoning + (f" [{'; '.join(marks)}]" if marks else "")
+            lines.append(f"  - Оцінка відповідності: {reasoning}")
             lines.append(f"  - Ветеранські бонуси: {'так' if v.veteran_bonus else 'ні'}")
             loc = "так" if v.low_match_location else "ні"
             if v.low_match_location:
                 loc += f" ({v.low_match_location_reason})"
-            lines.append(f"  - Low match через локацію: {loc}")
+            lines.append(f"  - Обмеження локації: {loc}")
             if v.company_flag:
                 lines.append(f"  - Прапорець: {v.company_flag}")
-            if v.card_only:
-                lines.append("  - Позначка: лише картка (Match не вище Medium)")
             date_str = "невизначена" if v.date_undetermined else (v.posted_date or "невизначена")
             lines.append(f"  - Дата публікації: {date_str}\n")
 
+    # Блок «Майже підійшли» — щодня, одразу після основного списку (Правило И п.7).
+    near = step1_result.get("near_misses") or []
+    lines.append("**Майже підійшли**" + ("" if near else ": немає"))
+    for nm in near:
+        lines.append(f"- **{nm.title}** | {nm.company} | [{nm.source}]({nm.url}) | не виконано: {nm.unmet}")
+    lines.append("")
+
+    # Статуси всіх джерел — окремим рядком після списку (Правило В, И п.8).
+    status_parts = []
+    for st in step1_result["source_statuses"].values():
+        status_parts.append(f"{st.source}: {st.status}")
+    if status_parts:
+        lines.append("Статуси джерел: " + "; ".join(status_parts) + "\n")
+
     # Службові подробиці — окремим блоком «Примітки», не всередині списку.
     notes: list[str] = []
-    unavailable = [
-        s.source for s in step1_result["source_statuses"].values() if s.status == "недоступне"
-    ]
-    if unavailable:
-        notes.append(f"Недоступні джерела в цьому запуску: {', '.join(unavailable)}")
     if step1_result.get("dedup_log_note"):
         notes.append(step1_result["dedup_log_note"])
     if step1_result.get("unknown_date_note"):
@@ -127,6 +141,14 @@ def format_report(
     else:
         for v in projects:
             lines.extend(_format_freelance_project(v))
+        # «не знайдено» окремо по кожному з трьох джерел, якщо різниця є.
+        groups = {"BI и аналитика данных": "Freelancehunt — BI и аналитика данных",
+                  "Базы данных и SQL": "Freelancehunt — Базы данных и SQL", "Telegram": "Telegram-канал"}
+        present = {("Telegram" if v.source == "telegram" else v.category) for v in projects}
+        for key, name in groups.items():
+            if key not in present:
+                lines.append(f"{name}: нових релевантних фріланс-проєктів не знайдено.")
+        lines.append("")
 
     fl_unavailable = [
         s.source for s in step1_2_result.get("source_statuses", {}).values() if s.status == "недоступне"
@@ -145,6 +167,8 @@ def format_report(
             status_str = f" | Статус: {f.status}" if f.status else ""
             lines.append(f"- {f.sender} | {f.subject} | {f.date}{status_str}")
             lines.append(f"  {f.summary}\n")
+    for note in step2_result.get("notes") or []:
+        lines.append(f"⚠️ {note}")
 
     lines.append("\n## Крок 3 — метрики\n")
     if step3_result.get("saved"):

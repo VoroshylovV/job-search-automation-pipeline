@@ -54,9 +54,9 @@ def test_evaluate_uses_batches_of_configured_size():
     assert sorted(res) == list(range(45))
 
 
-def test_prompt_limits_text_fields_to_150_chars():
+def test_prompt_limits_text_fields_length():
     from claude_orchestrator.prompts import VACANCY_EVAL_SYSTEM_PROMPT
-    assert "150 символів" in VACANCY_EVAL_SYSTEM_PROMPT
+    assert "200 символів" in VACANCY_EVAL_SYSTEM_PROMPT
 
 
 def test_truncated_batch_is_split_in_half_and_retried():
@@ -242,9 +242,9 @@ def test_step2_pauses_between_threads(monkeypatch):
 def test_prompt_rules_from_09_10_log_review():
     from claude_orchestrator.prompts import VACANCY_EVAL_SYSTEM_PROMPT, VACANCY_STAGE_CARD, VACANCY_STAGE_FULL
     assert "Power BI при наявному Tableau" in VACANCY_EVAL_SYSTEM_PROMPT and "НЕ є причиною відсіву" in VACANCY_EVAL_SYSTEM_PROMPT
-    assert "Бізнес-аналітик (BA)" in VACANCY_STAGE_FULL and "Match-рівень Low" in VACANCY_STAGE_FULL
+    assert "Бізнес-аналітик (BA)" in VACANCY_STAGE_FULL and "без примусового Low" in VACANCY_STAGE_FULL
     assert "Удаленная работа" in VACANCY_STAGE_FULL and "Віддалена робота" in VACANCY_STAGE_FULL
-    assert "BA/операційну аналітику НЕ відсівай" in VACANCY_STAGE_CARD
+    assert "BA/Ops/CRM/AI-" in VACANCY_STAGE_CARD
 
 
 # ---- 6. Крок 2: вікно, ліміт, пропуск тредів, лічильники ---------------------
@@ -313,11 +313,12 @@ def test_selfcheck_step2_partial_when_threads_skipped():
 
 # ---- 7. BA/Ops: Low лише при ≥1 збігу, інакше відсів за "роль" --------------
 
-def test_prompt_ba_ops_requires_skill_match():
-    from claude_orchestrator.prompts import VACANCY_STAGE_FULL
-    assert "ОДИН збіг із навичками кандидата" in VACANCY_STAGE_FULL
-    assert "Нуль збігів" in VACANCY_STAGE_FULL and 'reject_code "роль"' in VACANCY_STAGE_FULL
-    assert "Бізнес-аналітик CRM Dynamics 365" in VACANCY_STAGE_FULL
+def test_prompt_ba_ops_requires_sql_in_requirements():
+    """Правило И п.3 (18.10.2026): BA/Ops/Systems — лише з SQL у вимогах."""
+    from claude_orchestrator.prompts import VACANCY_STAGE_FULL, VACANCY_EVAL_SYSTEM_PROMPT
+    assert "лише \\\nякщо SQL" in VACANCY_STAGE_FULL or "якщо SQL прямо є у вимогах" in VACANCY_STAGE_FULL
+    assert 'Без SQL у вимогах — відсів, reject_code "роль"' in VACANCY_STAGE_FULL
+    assert "CRM-аналітик" in VACANCY_EVAL_SYSTEM_PROMPT and "AI Data Analyst" in VACANCY_EVAL_SYSTEM_PROMPT
 
 
 def test_ba_with_zero_skill_matches_rejected_as_role_end_to_end():

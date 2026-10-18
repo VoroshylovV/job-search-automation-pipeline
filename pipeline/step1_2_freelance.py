@@ -24,6 +24,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
@@ -37,7 +38,11 @@ from config import (
     FREELANCE_DEDUP_LOG_TITLE,
     FREELANCEHUNT_LOW_BIDS_MAX,
     FREELANCEHUNT_MEDIUM_BIDS_MAX,
+    FREELANCE_ERP_PLANNING_PATTERN,
     FREELANCE_METRICS_SHEET_TITLE,
+    FREELANCE_SMALL_BUDGET_UAH,
+    FREELANCE_SPECIFIC_SYSTEM_PATTERN,
+    FREELANCE_USD_TO_UAH,
     FREELANCE_ZERO_STREAK_REVIEW_THRESHOLD,
     RESUME_FOLDER_ID,
 )
@@ -64,6 +69,33 @@ def _competition_level(bids_count: int | None) -> str | None:
     if bids_count <= FREELANCEHUNT_MEDIUM_BIDS_MAX:
         return "середня"
     return "висока"
+
+
+def _budget_uah(budget_raw: str) -> float | None:
+    """Сума бюджету в грн з рядка на кшталт «5000 UAH» / «200 USD». None — не вказано."""
+    m = re.search(r"(\d[\d\s]*(?:[.,]\d+)?)", budget_raw or "")
+    if not m:
+        return None
+    amount = float(m.group(1).replace(" ", "").replace(",", "."))
+    if re.search(r"usd|\$", budget_raw, re.I):
+        amount *= FREELANCE_USD_TO_UAH
+    return amount
+
+
+def _hard_reject_reason(project: RawFreelanceProject) -> str | None:
+    """Жорсткий відсів Freelancehunt до оцінки Claude (Правило К, 18.10.2026).
+    Telegram-канал не чіпаємо: там немає ставок і бюджету."""
+    if project.source != "freelancehunt.com":
+        return None
+    text = f"{project.title}\n{project.description_snippet}"
+    if re.search(FREELANCE_SPECIFIC_SYSTEM_PATTERN, text, re.I):
+        return "специфічна система (BAS/1С)"
+    budget = _budget_uah(project.budget_raw)
+    if re.search(FREELANCE_ERP_PLANNING_PATTERN, text, re.I) and (budget is None or budget <= FREELANCE_SMALL_BUDGET_UAH):
+        return "ERP / автоматичне планування з малим бюджетом або без бюджету"
+    if budget is None and _competition_level(project.bids_count) == "висока":
+        return "бюджет не вказано, висока конкуренція"
+    return None
 
 
 def _parse_dedup_log(text: str) -> list[FreelanceDedupEntry]:
@@ -220,6 +252,11 @@ def run_step1_2(utc_today: date | None = None, local_today: date | None = None) 
     # НОВІ рішення цього запуску, а не вже відомі дублікати.
     projects_to_evaluate = [p for p in raw_projects if not (dedup_available and p.url in seen_log_urls)]
     skipped_known_url_count = len(raw_projects) - len(projects_to_evaluate)
+    # Жорсткий відсів (Правило К) — теж до Claude, рахується як «нерелевантні».
+    hard_rejected = [p for p in projects_to_evaluate if _hard_reject_reason(p)]
+    for p in hard_rejected:
+        logger.info("Фріланс відсіяно до оцінки: %s — %s", p.title, _hard_reject_reason(p))
+    projects_to_evaluate = [p for p in projects_to_evaluate if p not in hard_rejected]
     if skipped_known_url_count:
         logger.info(
             "%d фріланс-проєктів відфільтровано за відомим URL ДО оцінки Claude (економія викликів)",
@@ -238,7 +275,7 @@ def run_step1_2(utc_today: date | None = None, local_today: date | None = None) 
     eval_by_index = {ev["raw_index"]: ev for ev in evaluations}
 
     scored: list[ScoredFreelanceProject] = []
-    rejected_irrelevant = 0
+    rejected_irrelevant = len(hard_rejected)
 
     for i, project in enumerate(projects_to_evaluate):
         ev = eval_by_index.get(i)
@@ -304,8 +341,10 @@ def run_step1_2(utc_today: date | None = None, local_today: date | None = None) 
     shown_sql = sum(1 for v in scored if v.category == "Базы данных и SQL")
     shown_telegram = sum(1 for v in scored if v.source == "telegram")
 
-    status_bi = source_statuses.get("freelancehunt.com", SourceStatus("freelancehunt.com")).status
-    status_sql = status_bi  # один модуль на обидві категорії — статус спільний
+    fh_status = source_statuses.get("freelancehunt.com", SourceStatus("freelancehunt.com")).status
+    from scrapers import freelancehunt as _fh  # статус кожної категорії окремо
+    status_bi = _fh.LAST_CATEGORY_STATUS.get("BI и аналитика данных", fh_status)
+    status_sql = _fh.LAST_CATEGORY_STATUS.get("Базы данных и SQL", fh_status)
     status_telegram = source_statuses.get("telegram", SourceStatus("telegram")).status
 
     metrics_saved = False

@@ -43,11 +43,28 @@ class ScoredVacancy:
     # відгуків під іншою посадою/URL) — вакансія показується, не відсіюється.
     company_flag: str = ""
     card_only: bool = False  # повну сторінку не отримано — Match не вище Medium
+    # Позначки в «Оцінка відповідності» (Правило И, 18.10.2026): «англ. B2+»,
+    # «вимога: мат. освіта», «репост вакансії, показаної DD.MM».
+    flags: list[str] = field(default_factory=list)
 
     def dedup_key(self) -> str:
         if self.url:
             return self.url
         return f"{self.title.strip().lower()}|{self.company.strip().lower()}"
+
+
+@dataclass
+class NearMissVacancy:
+    """Блок «Майже підійшли» (Правило И п.7): відсіяна рівно за одним м'яким
+    критерієм. Не потрапляє в лог показаних і в лічильник «показано»."""
+
+    title: str
+    company: str
+    source: str
+    url: str
+    unmet: str  # яка саме умова не виконана
+    code: str  # код критерію для лога відсіву
+    posted_date: Optional[str] = None
 
 
 @dataclass

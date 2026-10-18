@@ -121,7 +121,7 @@ TRACKER_NOTES_COLUMN_HEADER = "Примітки"
 # ставить "Результат відгуку" = відмова + примітку, "запрошення на
 # співбесіду" — лише примітку. Кілька рядків однієї компанії без явної
 # вказівки на вакансію -> пропуск (див. pipeline/step3_tracker.py).
-TRACKER_AUTO_UPDATE = True
+TRACKER_AUTO_UPDATE = False  # 18.10.2026: вимкнено — онлайн-версія таблицю з листів не оновлює (A/B)
 
 # Файл Кроку 4 — самоперевірка запуску (аудит-лог, без обмеження за
 # довжиною, на відміну від дедуп-логу).
@@ -172,7 +172,13 @@ CANDIDATE_LOCAL_TZ = "Europe/Warsaw"
 class CandidateProfile:
     name: str = "Володимир Ворошилов"
     location: str = "Zawadzkie, Польща"
-    target_roles: tuple[str, ...] = ("Junior Data Analyst", "Junior Product Analyst")
+    target_roles: tuple[str, ...] = (
+        "Junior Data Analyst", "Junior Product Analyst",
+        # Правило И п.3 (18.10.2026): AI-аналітика і CRM-аналітика.
+        "AI Data Analyst / LLM-AI quality / prompt-evaluation analyst / AI Operations Analyst",
+        "CRM-аналітик",
+        "Operations / Systems / Business Data Analyst із SQL у вимогах",
+    )
     background: str = (
         "8+ років бекграунду в telecom/ops до переходу в аналітику даних, "
         "пройшов курс GoIT Data Analyst (сертифікат «Пройдено»)"
@@ -191,7 +197,8 @@ CANDIDATE = CandidateProfile()
 # Критерії фільтрації вакансій (Крок 1)
 # --------------------------------------------------------------------------
 MAX_EXPERIENCE_YEARS = 1.5
-MIN_SALARY_UAH = 40_000
+MIN_SALARY_UAH = 30_000  # Правило И п.2 (18.10.2026), було 40 000
+MIN_SALARY_USD_APPROX = 720  # ≈ 30 000 грн, те саме число, що в промпті
 MAX_ENGLISH_LEVEL = "B2"  # виключає C1+
 DATE_WINDOW_DAYS = 2  # "сьогодні або вчора"
 # Дату не завжди вдається розпізнати (ні скрапер, ні Claude не витягли
@@ -207,6 +214,18 @@ DATE_WINDOW_DAYS = 2  # "сьогодні або вчора"
 # здебільшого береться з повної сторінки (етап 2), а без неї в звіт іде не
 # більше 5 вакансій за запуск. Те саме значення — в онлайн-промпті.
 UNKNOWN_DATE_FALLBACK_LIMIT = 5
+
+# Правило И (18.10.2026), однаково з онлайн-промптом.
+# Репост ≠ дубль: нова вакансія (новий ID) з тією самою парою «компанія + посада»,
+# що вже є в Лозі показаних, — дубль лише якщо показ був менше REPOST_DUP_DAYS днів
+# тому або є відгук у таблиці; інакше показується з позначкою «репост».
+REPOST_DUP_DAYS = 7
+# Блок «Майже підійшли»: до NEAR_MISS_LIMIT вакансій, відсіяних рівно за одним
+# м'яким критерієм; ЗП у діапазоні NEAR_MISS_MIN_SALARY_UAH..MIN_SALARY_UAH.
+NEAR_MISS_LIMIT = 5
+NEAR_MISS_MIN_SALARY_UAH = 25_000
+# Виняток зі стопу за назвою: «Junior/Middle», «junior or middle», «Strong Junior».
+JUNIOR_IN_TITLE_PATTERN = r"\b(junior|джуніор|джун|strong\s+junior)\b"
 
 # Скільки вакансій/проєктів Claude оцінює за один виклик API (crop 1 і
 # крок 1.2). Виділено в конфіг, а не захардкоджено в pipeline-модулях, щоб
@@ -229,6 +248,13 @@ SENIORITY_STOP_PATTERN = (
 )
 
 SOURCES = ("djinni.co", "jobs.dou.ua", "robota.ua", "work.ua", "happymonday.ua")
+
+# Пагінація (Правило И п.8, 18.10.2026): гортати сторінки, доки не з'являться
+# вакансії старші за вікно свіжості або не скінчиться видача; djinni — мінімум
+# 3 сторінки (дат на картках немає). MAX_LISTING_PAGES — запобіжник: якщо
+# зупинились на ньому, джерело отримує статус «неповне покриття».
+MAX_LISTING_PAGES = 5
+DJINNI_MIN_PAGES = 3
 
 # --------------------------------------------------------------------------
 # Крок 1.2 — фріланс-проєкти (Freelancehunt + Telegram-канал)
@@ -281,6 +307,21 @@ FREELANCEHUNT_SKILL_IDS = {
 
 FREELANCEHUNT_LOW_BIDS_MAX = 14  # < 15 -> "низька"
 FREELANCEHUNT_MEDIUM_BIDS_MAX = 40  # 15-40 -> "середня", > 40 -> "висока"
+
+# Жорсткий відсів Freelancehunt ДО оцінки Claude (18.10.2026, однаково з
+# онлайн-промптом, Правило К). Приклад: проєкт 1658459 — автоматичне
+# планування в ERP, 29 ставок, замовник очікує 5–10 тис. грн за 2–4 дні.
+# 1) специфічна облікова система (BAS / 1С) — відсів завжди;
+# 2) ERP / автоматичне планування з бюджетом до FREELANCE_SMALL_BUDGET_UAH
+#    або без бюджету — відсів;
+# 3) бюджет не вказано і конкуренція висока (> FREELANCEHUNT_MEDIUM_BIDS_MAX) — відсів.
+FREELANCE_SPECIFIC_SYSTEM_PATTERN = r"\bbas\b|\b1\s?[сc]\b|\b1\s?[сc][:\-]|\bm\.?\s?e\.?\s?doc\b|\bм\.?\s?е\.?\s?док"
+FREELANCE_ERP_PLANNING_PATTERN = (
+    r"\berp\b|автоматичн\w*\s+планув|автоматическ\w*\s+планир|"
+    r"планування\s+виробництва|планирование\s+производства"
+)
+FREELANCE_SMALL_BUDGET_UAH = 10_000
+FREELANCE_USD_TO_UAH = 41.0  # груба оцінка для порівняння бюджету в $
 
 # Джерело 3 — загальний потік фріланс-гіґів (переважно Upwork-оголошення),
 # без категорій, тому фільтр релевантності тут виключно за ключовими

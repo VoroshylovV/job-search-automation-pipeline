@@ -45,9 +45,13 @@ from config import (
     DATE_WINDOW_DAYS,
     DEDUP_LOG_MAX_AGE_DAYS,
     DEDUP_LOG_TITLE,
+    JUNIOR_IN_TITLE_PATTERN,
+    NEAR_MISS_LIMIT,
+    REPOST_DUP_DAYS,
     RESUME_FOLDER_ID,
     TRACKER_COMPANY_COLUMN_HEADER,
     TRACKER_DATE_COLUMN_HEADER,
+    TRACKER_NOTES_COLUMN_HEADER,
     TRACKER_RESULT_COLUMN_HEADER,
     TRACKER_SHEET_TITLE,
     TRACKER_URL_COLUMN_HEADER,
@@ -55,15 +59,16 @@ from config import (
     UNKNOWN_DATE_FALLBACK_LIMIT,
 )
 from google_services import docs, drive, sheets
-from models import RawJobPosting, ScoredVacancy, SourceStatus
+from models import NearMissVacancy, RawJobPosting, ScoredVacancy, SourceStatus
 from scrapers import SCRAPER_MODULES
-from scrapers.base import ScraperError
+from scrapers.base import ScraperError, coverage_status
 from scrapers.detail import fetch_full_text
 
 logger = logging.getLogger(__name__)
 
 MATCH_ORDER = {"High": 0, "Medium": 1, "Low": 2}
 _SENIORITY_RE = re.compile(SENIORITY_STOP_PATTERN, re.IGNORECASE)
+_JUNIOR_RE = re.compile(JUNIOR_IN_TITLE_PATTERN, re.IGNORECASE)
 
 
 @dataclass
@@ -162,6 +167,7 @@ class TrackerRow:
     company: str
     date: str
     status: str
+    notes: str = ""  # «Примітки»: тут Володимир пише назву посади (окремої колонки немає)
 
 
 def _read_tracker_rows() -> list[TrackerRow] | None:
@@ -174,7 +180,7 @@ def _read_tracker_rows() -> list[TrackerRow] | None:
             return None
         rows = sheets.read_rows_by_headers(tracker["id"], [
             TRACKER_URL_COLUMN_HEADER, TRACKER_COMPANY_COLUMN_HEADER,
-            TRACKER_DATE_COLUMN_HEADER, TRACKER_RESULT_COLUMN_HEADER,
+            TRACKER_DATE_COLUMN_HEADER, TRACKER_RESULT_COLUMN_HEADER, TRACKER_NOTES_COLUMN_HEADER,
         ])
         return [
             TrackerRow(
@@ -182,6 +188,7 @@ def _read_tracker_rows() -> list[TrackerRow] | None:
                 company=r.get(TRACKER_COMPANY_COLUMN_HEADER, ""),
                 date=r.get(TRACKER_DATE_COLUMN_HEADER, ""),
                 status=r.get(TRACKER_RESULT_COLUMN_HEADER, ""),
+                notes=r.get(TRACKER_NOTES_COLUMN_HEADER, ""),
             )
             for r in rows
         ]
@@ -191,6 +198,7 @@ def _read_tracker_rows() -> list[TrackerRow] | None:
 
 
 def _is_duplicate_in_log(vacancy: ScoredVacancy, log_entries: list[DedupEntry]) -> bool:
+    """Той самий ID/URL — завжди дубль. Без ID — звірка за «компанія + назва»."""
     key = vacancy_key(vacancy.url)
     label = f"{vacancy.title} — {vacancy.company}".lower()
     for entry in log_entries:
@@ -199,6 +207,19 @@ def _is_duplicate_in_log(vacancy: ScoredVacancy, log_entries: list[DedupEntry]) 
         if key is None and (entry.identifier == vacancy.dedup_key() or entry.label.lower() == label):
             return True  # ID з URL не видобути — звірка за «компанія + назва»
     return False
+
+
+def _repost_shown_date(vacancy: ScoredVacancy, log_entries: list[DedupEntry]) -> date | None:
+    """Правило И п.6: нова вакансія (інший ID) з тією самою парою «посада —
+    компанія», що вже є в Лозі показаних. Повертає дату останнього показу або None."""
+    label = _norm_name(f"{vacancy.title} — {vacancy.company}")
+    latest = None
+    for entry in log_entries:
+        if _norm_name(entry.label) == label and not _same_vacancy_url(vacancy.url, entry.identifier):
+            d = _parse_date(entry.shown_date)
+            if d and (latest is None or d > latest):
+                latest = d
+    return latest
 
 
 def _parse_date(text: str | None) -> date | None:
@@ -214,26 +235,26 @@ def _parse_date(text: str | None) -> date | None:
 def _tracker_check(vacancy: ScoredVacancy, rows: list[TrackerRow]) -> tuple[str, str]:
     """('дубль', status) — вакансію вже подано; ('прапорець', status) — компанія
     є в таблиці під іншою вакансією (показуємо з позначкою); ('', '') — ні.
-    Дубль, якщо: (а) збігся ID вакансії з URL; (б) ID видобути не вдається
-    (у вакансії або в рядку таблиці) і збігаються компанія + дата; (в) для тієї
-    самої компанії URL у таблиці порожній. За назвою посади НЕ звіряємо —
-    у таблиці її немає окремою колонкою."""
+    Дубль (Правило Ж п.3 онлайн-промпту), якщо: (а) збігся ID вакансії з URL;
+    (б) для тієї самої компанії URL у таблиці порожній; (в) для тієї самої
+    компанії назва посади явно та сама — назву Володимир пише в «Примітки»."""
     flag_status = None
     company = _norm_name(vacancy.company)
-    posted = _parse_date(vacancy.posted_date)
     for row in rows:
         if _same_vacancy_url(vacancy.url, row.url):
             return "дубль", row.status
         if company and _norm_name(row.company) == company:
-            if not row.url.strip():
-                return "дубль", row.status
-            no_id = vacancy_key(vacancy.url) is None or vacancy_key(row.url) is None
-            if no_id and posted is not None and posted == _parse_date(row.date):
+            if not row.url.strip() or _title_in_notes(vacancy.title, row.notes):
                 return "дубль", row.status
             flag_status = flag_status if flag_status is not None else row.status
     if flag_status is not None:
         return "прапорець", flag_status
     return "", ""
+
+
+def _title_in_notes(title: str, notes: str) -> bool:
+    t = _norm_name(title)
+    return bool(t) and t in _norm_name(notes)
 
 
 def _final_match_level(ev: dict, card_only: bool) -> str:
@@ -266,8 +287,15 @@ def _scrape_all(today: date) -> tuple[list[RawJobPosting], dict[str, SourceStatu
         try:
             jobs = list(module.scrape())
             all_jobs.extend(jobs)
-            statuses[source_name] = SourceStatus(source=source_name, status="OK")
-            collection_methods[source_name] = getattr(module, "COLLECTION_METHOD", "не_встановлено")
+            # Покриття (Правило И п.8): «OK» лише якщо кожен запит дійшов до
+            # вакансій старших за вікно або до кінця видачі.
+            coverages = getattr(module, "LAST_COVERAGE", None)
+            if coverages:
+                status, method = coverage_status(coverages)
+            else:
+                status, method = "OK", getattr(module, "COLLECTION_METHOD", "не_встановлено")
+            statuses[source_name] = SourceStatus(source=source_name, status=status)
+            collection_methods[source_name] = method
             logger.info("%s: зібрано %d кандидатів", source_name, len(jobs))
         except ScraperError as exc:
             statuses[source_name] = SourceStatus(
@@ -415,6 +443,7 @@ def run_step1(utc_today: date | None = None, local_today: date | None = None) ->
 
     empty_result = {
         "vacancies": [],
+        "near_misses": [],
         "total_found_before_filters": total_found_before_filters,
         "source_statuses": source_statuses,
         "collection_methods": collection_methods,
@@ -486,8 +515,12 @@ def run_step1(utc_today: date | None = None, local_today: date | None = None) ->
     # і вакансії без URL (у звіті вакансія без посилання невалідна — Правило
     # В онлайн-промпту від 02.10.2026).
     remaining: list[RawJobPosting] = []
+    cap_medium_urls: set[str] = set()  # «Junior/Middle», «Strong Junior»: Match не вище Medium
     for j in jobs_to_evaluate:
         m = _SENIORITY_RE.search(j.title or "")
+        if m and _JUNIOR_RE.search(j.title or ""):
+            cap_medium_urls.add(j.url or "")
+            m = None  # Правило И п.4: нижня межа Junior — стоп за назвою не діє
         if m:
             decisions.append(_decision(j, "відсіяно", "досвід", f"рівень у назві: {m.group(0)}", date_source=_date_source(j, None)))
         elif not j.url:
@@ -515,7 +548,7 @@ def run_step1(utc_today: date | None = None, local_today: date | None = None) ->
     for i in stage1_ok:
         if i not in ranked:
             eval_by_index[i] = {"passes_criteria": False, "reject_code": "інше",
-                                "reject_reason": "Low на етапі 1 (картка) — повний текст не завантажувався"}
+                                "reject_reason": "Low на етапі 1 (картка)"}
     stage2_evals, full_text_ok = _confirm_with_full_text(
         [jobs_to_evaluate[i] for i in stage1_passed], local_today,
         [eval_by_index[i] for i in stage1_passed],
@@ -543,6 +576,7 @@ def run_step1(utc_today: date | None = None, local_today: date | None = None) ->
     budget_unevaluated_count = 0
     stage2_capped_count = 0
     unknown_date_limit_hit = False
+    near_candidates: list[tuple[RawJobPosting, NearMissVacancy, str]] = []
     for i, job in enumerate(jobs_to_evaluate):
         ev = eval_by_index.get(i)
         if not ev:
@@ -560,10 +594,17 @@ def run_step1(utc_today: date | None = None, local_today: date | None = None) ->
             ))
             continue
         if not ev.get("passes_criteria"):
-            decisions.append(_decision(
-                job, "відсіяно", ev.get("reject_code") or "інше", ev.get("reject_reason") or "",
-                ev.get("posted_date"), _date_source(job, ev, i in full_text_indices),
-            ))
+            code = ev.get("reject_code") or "інше"
+            reason = ev.get("reject_reason") or ""
+            dsrc = _date_source(job, ev, i in full_text_indices)
+            if ev.get("near_miss"):
+                near_candidates.append((job, NearMissVacancy(
+                    title=ev.get("normalized_title") or job.title, company=ev.get("normalized_company") or job.company,
+                    source=job.source, url=job.url or "", unmet=ev.get("near_miss_reason") or reason,
+                    code=code, posted_date=ev.get("posted_date"),
+                ), dsrc))
+                continue
+            decisions.append(_decision(job, "відсіяно", code, reason, ev.get("posted_date"), dsrc))
             continue
 
         posted_date = ev.get("posted_date")
@@ -578,20 +619,16 @@ def run_step1(utc_today: date | None = None, local_today: date | None = None) ->
                 decisions.append(_decision(job, "відсіяно", "дата", "поза вікном сьогодні/вчора", posted_date, _date_source(job, ev, i in full_text_indices)))
                 continue  # поза вікном "останні 2 дні" (місцевий час кандидата) — не показуємо
 
-        if date_undetermined:
-            if unknown_date_shown >= UNKNOWN_DATE_FALLBACK_LIMIT:
-                unknown_date_limit_hit = True
-                decisions.append(_decision(job, "відсіяно", "ліміт_невизначеної_дати", "", None, "невідома"))
-                continue  # дата невідома, і ліміт показу таких вакансій за цей запуск вичерпано
-            unknown_date_shown += 1
-
         card_only = i not in full_text_indices
+        level = _final_match_level(ev, card_only)
+        if (job.url or "") in cap_medium_urls and level == "High":
+            level = "Medium"
         vacancy = ScoredVacancy(
             title=ev.get("normalized_title") or job.title,
             company=ev.get("normalized_company") or job.company,
             source=job.source,
             url=job.url,
-            match_level=_final_match_level(ev, card_only),
+            match_level=level,
             match_reasoning=ev.get("match_reasoning") or "",
             veteran_bonus=bool(ev.get("veteran_bonus")),
             low_match_location=bool(ev.get("low_match_location")),
@@ -599,29 +636,59 @@ def run_step1(utc_today: date | None = None, local_today: date | None = None) ->
             posted_date=posted_date,
             date_undetermined=date_undetermined,
             card_only=card_only,
+            flags=[f for f in (ev.get("flags") or []) if isinstance(f, str) and f.strip()],
         )
+        dsrc = _date_source(job, ev, i in full_text_indices)
 
         # Обидва рівні — паралельно й незалежно (кожен, що доступний).
         if log_text is not None and _is_duplicate_in_log(vacancy, log_entries):
-            decisions.append(_decision(job, "відсіяно", "дубль", "після оцінки", posted_date, _date_source(job, ev, i in full_text_indices)))
+            decisions.append(_decision(job, "відсіяно", "дубль", "після оцінки", posted_date, dsrc))
             continue
-        if tracker_rows is not None:
-            verdict, status = _tracker_check(vacancy, tracker_rows)
-            if verdict == "дубль":
-                decisions.append(_decision(job, "відсіяно", "подано", "таблиця відгуків", posted_date, _date_source(job, ev, i in full_text_indices)))
+        verdict, status = _tracker_check(vacancy, tracker_rows) if tracker_rows is not None else ("", "")
+        if verdict == "дубль":
+            decisions.append(_decision(job, "відсіяно", "подано", "таблиця відгуків", posted_date, dsrc))
+            continue
+        if verdict == "прапорець":
+            vacancy.company_flag = f"Компанія вже в таблиці: {status or 'без статусу'}"
+        # Правило И п.6: репост (новий ID, та сама пара «посада — компанія» у лозі).
+        repost_date = _repost_shown_date(vacancy, log_entries) if log_text is not None else None
+        if repost_date is not None:
+            shown = repost_date.strftime("%d.%m")
+            if (utc_today - repost_date).days < REPOST_DUP_DAYS:
+                near_candidates.append((job, NearMissVacancy(
+                    title=vacancy.title, company=vacancy.company, source=job.source, url=job.url or "",
+                    unmet=f"репост вакансії, показаної {shown} (менше {REPOST_DUP_DAYS} днів тому)",
+                    code="дубль", posted_date=posted_date,
+                ), dsrc))
                 continue
-            if verdict == "прапорець":
-                vacancy.company_flag = f"Компанія вже в таблиці: {status or 'без статусу'}"
+            vacancy.flags.append(f"репост вакансії, показаної {shown}")
         # dedup_level_used == 0: обидва рівні недоступні — показуємо без дедублікації.
+
+        # Ліміт невизначеної дати рахується ПІСЛЯ дедублікації (Крок 1: дата
+        # перевіряється для вакансії, «що пройшла перевірку на дублі»).
+        if date_undetermined:
+            if unknown_date_shown >= UNKNOWN_DATE_FALLBACK_LIMIT:
+                unknown_date_limit_hit = True
+                decisions.append(_decision(job, "відсіяно", "ліміт_невизначеної_дати", "", None, "невідома"))
+                continue  # дата невідома, і ліміт показу таких вакансій за цей запуск вичерпано
+            unknown_date_shown += 1
 
         scored.append(vacancy)
         decisions.append(_decision(
             job, "показано", "—",
             f"{vacancy.match_level} · {'лише картка' if card_only else 'сторінка'}",
-            posted_date, "невідома" if date_undetermined else _date_source(job, ev, i in full_text_indices),
+            posted_date, "невідома" if date_undetermined else dsrc,
         ))
 
     scored.sort(key=lambda v: MATCH_ORDER.get(v.match_level, 3))
+
+    # Блок «Майже підійшли» (Правило И п.7): до NEAR_MISS_LIMIT найсвіжіших.
+    # Не в лог показаних і не в «показано»; у лозі відсіву Результат = «майже».
+    near_candidates.sort(key=lambda t: t[1].posted_date or "", reverse=True)
+    near_misses = [nm for _, nm, _ in near_candidates[:NEAR_MISS_LIMIT]]
+    for k, (job, nm, dsrc) in enumerate(near_candidates):
+        result = "майже" if k < NEAR_MISS_LIMIT else "відсіяно"
+        decisions.append(_decision(job, result, nm.code, nm.unmet, nm.posted_date, dsrc))
 
     # Оновлення лога (тільки якщо Рівень 1 фактично читався — інакше
     # перезаписувати лог тим, чого не читали, ризиковано: могли б стерти
@@ -665,6 +732,7 @@ def run_step1(utc_today: date | None = None, local_today: date | None = None) ->
 
     return {
         "vacancies": scored,
+        "near_misses": near_misses,
         "total_found_before_filters": total_found_before_filters,
         "source_statuses": source_statuses,
         "collection_methods": collection_methods,

@@ -17,3 +17,6 @@ dump_html.py
 
 # tg_market: зібрані дані (лише витягнуті поля, але це робочі дані, не код)
 tg_market/data/
+
+# Журнал вартості дописується щодня на ПК — у git лише базова лінія (docs/costs_baseline.csv)
+logs/costs.csv

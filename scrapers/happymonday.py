@@ -10,14 +10,18 @@ from typing import Iterator
 from bs4 import BeautifulSoup
 
 from models import RawJobPosting
-from scrapers.base import ScraperError, fetch, get_session
+from config import DATE_WINDOW_DAYS, MAX_LISTING_PAGES
+from scrapers.base import Coverage, ScraperError, fetch, get_session, paginate
 
 COLLECTION_METHOD = "перша_сторінка"  # див. коментар у scrapers/djinni.py
+LAST_COVERAGE: list[Coverage] = []
 
 BASE_URL = "https://happymonday.ua"
 LISTING_URLS = [
     f"{BASE_URL}/jobs-search/data-analyst",
     f"{BASE_URL}/jobs-search/product-analyst",
+    f"{BASE_URL}/jobs-search/ai-analyst",   # Правило И п.3 (18.10.2026)
+    f"{BASE_URL}/jobs-search/crm-analyst",
 ]
 
 # Посилання на вакансію: /jobs/<id>
@@ -51,24 +55,38 @@ def _parse_card(card) -> RawJobPosting | None:
     )
 
 
+def _parse_page(html: str) -> list[RawJobPosting]:
+    soup = BeautifulSoup(html, "html.parser")
+    jobs, seen = [], set()
+    for link in soup.find_all("a", href=JOB_LINK_RE):
+        card = link.find_parent(["div", "li", "article"]) or link.parent
+        job = _parse_card(card)
+        if job is not None and job.url not in seen:
+            seen.add(job.url)
+            jobs.append(job)
+    return jobs
+
+
 def scrape() -> Iterator[RawJobPosting]:
     session = get_session()
     seen: set[str] = set()
     any_success = False
     last_error: Exception | None = None
+    LAST_COVERAGE.clear()
 
     for listing_url in LISTING_URLS:
         try:
-            resp = fetch(session, listing_url)
+            jobs, cov = paginate(
+                lambda n, u=listing_url: _parse_page(fetch(session, u, params={"page": n} if n > 1 else None).text),
+                listing_url, max_pages=MAX_LISTING_PAGES, window_days=DATE_WINDOW_DAYS,
+            )
         except ScraperError as exc:
             last_error = exc
             continue
         any_success = True
-        soup = BeautifulSoup(resp.text, "html.parser")
-        for link in soup.find_all("a", href=JOB_LINK_RE):
-            card = link.find_parent(["div", "li", "article"]) or link.parent
-            job = _parse_card(card)
-            if job is None or job.url in seen:
+        LAST_COVERAGE.append(cov)
+        for job in jobs:
+            if job.url in seen:
                 continue
             seen.add(job.url)
             yield job

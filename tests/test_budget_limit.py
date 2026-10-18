@@ -80,6 +80,7 @@ def test_budget_limit_stops_calls_and_marks_rest_without_crash(monkeypatch):
     with patch.object(step1, "_scrape_all", _scrape(jobs)), \
          patch.object(step1, "CLAUDE_EVAL_CHUNK_SIZE", 5), \
          patch.object(step1, "MAX_RUN_COST_USD", 0.30), patch.object(step1, "BUDGET_RESERVE_LATER_STEPS_USD", 0.05), \
+         patch.object(step1, "CLAUDE_MODEL_CARDS", "claude-haiku-4-5-20251001"), \
          patch.object(step1, "_read_dedup_log_with_retry", lambda: (None, "")):
         res = step1.run_step1(utc_today=TODAY, local_today=TODAY)
 
@@ -97,6 +98,7 @@ def test_budget_exhausted_before_start_marks_everything_and_does_not_raise(monke
     monkeypatch.setattr(client, "_client", lambda: SimpleNamespace(messages=SimpleNamespace(create=lambda **kw: pytest.fail("API не мав викликатись"))))
     cost.tracker.record("claude-sonnet-4-5", SimpleNamespace(input_tokens=0, output_tokens=20_000), "cards")
     with patch.object(step1, "_scrape_all", _scrape([_job(i) for i in range(4)])), \
+         patch.object(step1, "MAX_RUN_COST_USD", 0.30), \
          patch.object(step1, "_read_dedup_log_with_retry", lambda: (None, "")):
         res = step1.run_step1(utc_today=TODAY, local_today=TODAY)
     assert res["vacancies"] == [] and res["budget_unevaluated_count"] == 4

@@ -47,9 +47,13 @@ def _step1_status(step1_result: dict) -> tuple[str, str]:
     dedup_level = step1_result.get("dedup_level_used", 0)
     unevaluated = step1_result.get("unevaluated_count", 0)
 
+    collected = sum(1 for s in statuses.values() if s.status != "недоступне")
+    partial = [n for n, s in statuses.items() if s.status.startswith("неповне покриття")]
     notes = []
     if ok_count < total:
         notes.append(f"джерел перевірено {ok_count}/{total}")
+    if partial:
+        notes.append(f"неповне покриття: {', '.join(partial)}")
     if unevaluated:
         notes.append(f"оцінку не виконано для {unevaluated} вакансій (помилка Claude)")
     budget_skipped = step1_result.get("budget_unevaluated_count", 0)
@@ -63,7 +67,7 @@ def _step1_status(step1_result: dict) -> tuple[str, str]:
     elif dedup_level == 2:
         notes.append("спрацював лише рівень 2 дедублікації (таблиця відгуків)")
 
-    if ok_count == 0:
+    if collected == 0:
         status = "НЕ ВИКОНАНО"
     elif ok_count == total and dedup_level in (1, 2) and not (unevaluated or budget_skipped or capped):
         status = "OK" if dedup_level == 1 else "ЧАСТКОВО"
@@ -115,9 +119,13 @@ def _step1_2_status(step1_2_result: dict) -> tuple[str, str]:
     ok_count = sum(1 for s in statuses.values() if s.status == "OK")
     total = len(statuses) or 2
 
+    collected = sum(1 for s in statuses.values() if s.status != "недоступне")
+    partial = [n for n, s in statuses.items() if s.status.startswith("неповне покриття")]
     notes = []
     if ok_count < total:
         notes.append(f"джерел перевірено {ok_count}/{total}")
+    if partial:
+        notes.append(f"неповне покриття: {', '.join(partial)}")
     if not step1_2_result.get("dedup_log_updated") and step1_2_result.get("dedup_log_note"):
         notes.append("дедублікація не виконана (лог недоступний)")
     if not step1_2_result.get("metrics_saved"):
@@ -136,7 +144,7 @@ def _collection_method(collection_methods: dict[str, str], source_statuses: dict
     ok_methods = {
         collection_methods.get(name, "не_встановлено")
         for name, s in source_statuses.items()
-        if s.status == "OK"
+        if s.status != "недоступне"
     }
     if not ok_methods:
         return "не_встановлено"

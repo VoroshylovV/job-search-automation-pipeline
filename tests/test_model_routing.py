@@ -82,5 +82,32 @@ def test_step2_uses_fulltext_model(monkeypatch):
     msg = {"id": "m", "payload": {"headers": [{"name": "From", "value": "hr@x.com"}, {"name": "Subject", "value": "s"},
                                                {"name": "Date", "value": "d"}], "mimeType": "text/plain", "body": {}}, "snippet": "тіло"}
     monkeypatch.setattr(step2_mail.gmail, "get_thread", lambda tid: {"messages": [msg]})
-    step2_mail.run_step2(company_names=[])
+    monkeypatch.setattr(step2_mail.gmail, "apply_label", lambda *a: None)
+    res = step2_mail.run_step2(company_names=[])
     assert used == [("mail", "FULL-MODEL")]
+    # hr@ враховується завжди, навіть без оцінки Claude (Крок 2 онлайн-промпту).
+    assert res["hr_domain_emails"] == 1
+
+
+def test_company_names_skip_google_native_files_and_doubtful(monkeypatch):
+    from pipeline import step2_mail
+    files = [
+        {"name": "Voroshylov_Business_Data_Analyst_NovaDigital.pdf", "mimeType": "application/pdf"},
+        {"name": "Voroshylov_CV_Appflame_v2.pdf", "mimeType": "application/pdf"},
+        {"name": "Результат щоденної перевірки", "mimeType": "application/vnd.google-apps.spreadsheet"},
+        {"name": "Лог причин відсіву вакансій", "mimeType": "application/vnd.google-apps.folder"},
+        {"name": "якийсь дуже довгий незрозумілий файл без структури.pdf", "mimeType": "application/pdf"},
+    ]
+    monkeypatch.setattr(step2_mail, "list_folder_files", lambda fid: files)
+    skipped = []
+    assert step2_mail._extract_company_names(skipped) == ["Appflame", "NovaDigital"]
+    assert skipped == ["якийсь дуже довгий незрозумілий файл без структури.pdf"]
+
+
+def test_step2_continues_when_drive_unavailable(monkeypatch):
+    from pipeline import step2_mail
+    monkeypatch.setattr(step2_mail, "_extract_company_names", lambda skipped=None: (_ for _ in ()).throw(RuntimeError("drive")))
+    monkeypatch.setattr(step2_mail.gmail, "get_or_create_label", lambda n: "L")
+    monkeypatch.setattr(step2_mail.gmail, "search_threads", lambda c, label_id_to_exclude: [])
+    res = step2_mail.run_step2()
+    assert res["company_names"] == [] and "не вдалося оновити" in res["notes"][0]

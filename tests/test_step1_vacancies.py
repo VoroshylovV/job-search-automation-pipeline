@@ -299,18 +299,87 @@ def test_company_in_tracker_empty_url_is_duplicate():
     assert _run_with([_job(0)], evals, tracker=tracker)["vacancies"] == []
 
 
-def test_company_plus_date_is_duplicate_only_when_id_missing():
+def test_same_company_duplicate_by_title_in_notes_not_by_date():
+    """Правило Ж п.3: та сама компанія + назва посади в «Примітки» -> подано;
+    збіг дат більше не робить дублем."""
     evals = [_eval(0, posted_date="2026-10-09")]
-    # у URL ні вакансії, ні таблиці ID немає -> компанія + дата
-    no_id = [step1.TrackerRow("https://example.com/about", "Company 0", "09.10.2026", "Подано")]
-    assert _run_with([_job(0)], evals, tracker=no_id)["vacancies"] == []
-    other_date = [step1.TrackerRow("https://example.com/about", "Company 0", "01.10.2026", "Подано")]
-    assert len(_run_with([_job(0)], evals, tracker=other_date)["vacancies"]) == 1
-    # обидва мають ID, вони різні -> дата не береться до уваги
-    job = RawJobPosting(source="work.ua", title="Data Analyst 0", company="Company 0", url="https://work.ua/jobs/5",
-                        posted_raw="", salary_raw="", description_snippet="")
-    with_id = [step1.TrackerRow("https://work.ua/jobs/6", "Company 0", "09.10.2026", "Подано")]
-    assert len(_run_with([job], evals, tracker=with_id)["vacancies"]) == 1
+    same_title = [step1.TrackerRow("https://work.ua/jobs/6", "Company 0", "01.10.2026", "Подано",
+                                   notes="Data Analyst 0: https://work.ua/jobs/6")]
+    res = _run_with([_job(0)], evals, tracker=same_title)
+    assert res["vacancies"] == [] and res["decisions"][-1]["code"] == "подано"
+    same_date_other_title = [step1.TrackerRow("https://example.com/about", "Company 0", "09.10.2026", "Подано",
+                                              notes="Marketing Analyst")]
+    res = _run_with([_job(0)], evals, tracker=same_date_other_title)
+    assert len(res["vacancies"]) == 1 and res["vacancies"][0].company_flag == "Компанія вже в таблиці: Подано"
+
+
+def _job_id(i: int, vid: int) -> RawJobPosting:
+    return RawJobPosting(source="work.ua", title=f"Data Analyst {i}", company=f"Company {i}",
+                         url=f"https://www.work.ua/jobs/{vid}/", posted_raw="", salary_raw="", description_snippet="")
+
+
+def test_repost_older_than_7_days_shown_with_flag():
+    evals = [_eval(0, posted_date="2026-10-09")]
+    log = "2026-10-01 | https://www.work.ua/jobs/100/ | Data Analyst 0 — Company 0\n"
+    res = _run_with([_job_id(0, 200)], evals, log_text=log)
+    assert len(res["vacancies"]) == 1
+    assert res["vacancies"][0].flags == ["репост вакансії, показаної 01.10"]
+
+
+def test_repost_within_7_days_goes_to_near_miss():
+    evals = [_eval(0, posted_date="2026-10-09")]
+    log = "2026-10-05 | https://www.work.ua/jobs/100/ | Data Analyst 0 — Company 0\n"
+    res = _run_with([_job_id(0, 200)], evals, log_text=log)
+    assert res["vacancies"] == []
+    assert len(res["near_misses"]) == 1 and res["near_misses"][0].code == "дубль"
+    assert res["decisions"][-1]["result"] == "майже"
+
+
+def test_repost_with_application_is_podano():
+    evals = [_eval(0, posted_date="2026-10-09")]
+    log = "2026-10-01 | https://www.work.ua/jobs/100/ | Data Analyst 0 — Company 0\n"
+    tracker = [step1.TrackerRow("https://www.work.ua/jobs/100/", "Company 0", "02.10.2026", "Подано", notes="Data Analyst 0")]
+    res = _run_with([_job_id(0, 200)], evals, log_text=log, tracker=tracker)
+    assert res["vacancies"] == [] and res["decisions"][-1]["code"] == "подано"
+
+
+def test_junior_middle_title_not_stopped_and_capped_medium():
+    job = RawJobPosting(source="jobs.dou.ua", title="Strong junior or middle Data analyst у сферу AI", company="Artellence",
+                        url="https://jobs.dou.ua/companies/artellence/vacancies/376574/", posted_raw="", salary_raw="",
+                        description_snippet="")
+    ev = {**_eval(0, posted_date="2026-10-09"), "normalized_title": job.title, "normalized_company": "Artellence",
+          "match_level": "High", "match_scores": {"skills": 2, "duties": 2, "expectations": 2}}
+    res = _run_with([job], [ev])
+    assert len(res["vacancies"]) == 1 and res["vacancies"][0].match_level == "Medium"
+    senior = RawJobPosting(source="jobs.dou.ua", title="Middle Data Analyst", company="X",
+                           url="https://jobs.dou.ua/companies/x/vacancies/1/", posted_raw="", salary_raw="", description_snippet="")
+    assert _run_with([senior], [ev])["decisions"][0]["code"] == "досвід"
+
+
+def test_near_miss_from_model_listed_and_logged_not_shown():
+    evals = [{**_eval(i, passes=False, posted_date=f"2026-10-0{i + 1}"), "reject_code": "ЗП",
+              "near_miss": True, "near_miss_reason": "ЗП 28 000 грн"} for i in range(7)]
+    res = _run_with([_job(i) for i in range(7)], evals)
+    assert res["vacancies"] == []
+    assert len(res["near_misses"]) == 5
+    assert [n.posted_date for n in res["near_misses"]][0] == "2026-10-07"  # найсвіжіші першими
+    results = [d["result"] for d in res["decisions"]]
+    assert results.count("майже") == 5 and results.count("відсіяно") == 2
+
+
+def test_flags_from_model_passed_to_vacancy():
+    ev = {**_eval(0, posted_date="2026-10-09"), "flags": ["англ. B2+", "вимога: мат. освіта"]}
+    res = _run_with([_job(0)], [ev])
+    assert res["vacancies"][0].flags == ["англ. B2+", "вимога: мат. освіта"]
+
+
+def test_undated_limit_counted_after_dedup():
+    """Дубль без дати не «з'їдає» слот ліміту невизначеної дати."""
+    jobs = [_job(i) for i in range(6)]
+    evals = [_eval(i, date_undetermined=True) for i in range(6)]
+    tracker = [step1.TrackerRow("https://example.com/0", "Company 0", "01.10.2026", "Подано")]
+    res = _run_with(jobs, evals, tracker=tracker)
+    assert len(res["vacancies"]) == 5
 
 
 def test_military_rejection_passes_through_with_code():

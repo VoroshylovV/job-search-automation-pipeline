@@ -53,7 +53,8 @@ def _execute(request, *, pause: float = GMAIL_RATE_LIMIT_PAUSE_SEC):
 
 def _build_query(company_names: list[str]) -> str:
     keyword_clause = " OR ".join(f'"{kw}"' for kw in GMAIL_KEYWORDS)
-    company_clause = " OR ".join(f'"{c}"' for c in company_names) if company_names else ""
+    # Компанія — лише відправник (адреса чи домен), не будь-яка згадка в тексті.
+    company_clause = " OR ".join(f'from:"{c}"' for c in company_names) if company_names else ""
     hr_clause = "from:hr@*"
 
     clauses = [f"({keyword_clause})", hr_clause]
