@@ -71,4 +71,12 @@ def test_coverage_status_text():
 def test_djinni_page_url_and_ai_crm_queries():
     assert djinni._page_url("https://djinni.co/jobs/keyword-data_analyst/?employment=remote", 2).endswith("&page=2")
     assert djinni._page_url("https://djinni.co/jobs/x/", 1) == "https://djinni.co/jobs/x/"
-    assert any("ai+analyst" in u for u in djinni.LISTING_URLS) and any("crm+analyst" in u for u in djinni.LISTING_URLS)
+    for kw in ("product+analyst", "ai+analyst", "crm+analyst"):
+        assert any(f"all_keywords={kw}" in u for u in djinni.LISTING_URLS)
+    assert not any("all-keywords" in u or "keyword-product_analyst" in u for u in djinni.LISTING_URLS)
+
+
+def test_happymonday_only_data_analyst_and_path_pagination():
+    from scrapers import happymonday
+    assert happymonday.LISTING_URLS == ["https://happymonday.ua/jobs-search/data-analyst"]
+    assert happymonday._page_url(happymonday.LISTING_URLS[0], 2).endswith("/data-analyst/page/2")

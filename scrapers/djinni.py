@@ -22,8 +22,7 @@ from typing import Iterator
 from bs4 import BeautifulSoup
 
 from models import RawJobPosting
-from config import DATE_WINDOW_DAYS, DJINNI_MIN_PAGES, MAX_LISTING_PAGES
-from scrapers.base import Coverage, ScraperError, fetch, get_session, paginate
+from scrapers.base import Coverage, ScraperError, fetch, get_session
 
 # Крок 4 (4.2): спосіб збору тепер рахується за фактом (base.coverage_status)
 # з LAST_COVERAGE — покриття кожного запиту останнього scrape().
@@ -40,14 +39,20 @@ BASE_URL = "https://djinni.co"
 # містила достатньо тексту, щоб їх відсіяти. Перевірено 02.10.2026: на
 # keyword-data_analyst фільтр звужує видачу до ~9 вакансій.
 LISTING_FILTER = "?employment=remote&exp_level=no_exp&exp_level=1y"
+# 18.10.2026 (діагностика на ПК + Firecrawl): keyword-product_analyst і
+# параметр "all-keywords" (дефіс) Djinni ігнорує — віддає загальну стрічку
+# (Media Buyer тощо). Працює лише "all_keywords" (підкреслення). Параметр
+# page=2+ скидає фільтри (загальна стрічка ~400 сторінок), тому беремо ЛИШЕ
+# першу сторінку кожного запиту. Відфільтрована видача вміщується на одну
+# сторінку (data_analyst — 12, product — 3, ai — 2 вакансії).
 LISTING_URLS = [
     f"{BASE_URL}/jobs/keyword-data_analyst/{LISTING_FILTER}",
-    f"{BASE_URL}/jobs/keyword-product_analyst/{LISTING_FILTER}",
-    # Правило И п.3 (18.10.2026): AI- і CRM-аналітика. Для них немає
-    # keyword-сторінок, тому пошук за ключовими словами з тими самими фільтрами.
-    f"{BASE_URL}/jobs/?all-keywords=ai+analyst&employment=remote&exp_level=no_exp&exp_level=1y",
-    f"{BASE_URL}/jobs/?all-keywords=crm+analyst&employment=remote&exp_level=no_exp&exp_level=1y",
+    f"{BASE_URL}/jobs/?all_keywords=product+analyst&employment=remote&exp_level=no_exp&exp_level=1y",
+    f"{BASE_URL}/jobs/?all_keywords=ai+analyst&employment=remote&exp_level=no_exp&exp_level=1y",
+    f"{BASE_URL}/jobs/?all_keywords=crm+analyst&employment=remote&exp_level=no_exp&exp_level=1y",
 ]
+# Повна сторінка Djinni — 15 карток. Менше — видача закінчилась (покриття повне).
+DJINNI_PAGE_SIZE = 15
 
 
 def _page_url(url: str, n: int) -> str:
@@ -107,16 +112,12 @@ def scrape() -> Iterator[RawJobPosting]:
 
     for listing_url in LISTING_URLS:
         try:
-            jobs, cov = paginate(
-                lambda n, u=listing_url: _parse_page(fetch(session, _page_url(u, n)).text),
-                listing_url, min_pages=DJINNI_MIN_PAGES, max_pages=MAX_LISTING_PAGES,
-                window_days=DATE_WINDOW_DAYS,
-            )
+            jobs = _parse_page(fetch(session, listing_url).text)
         except ScraperError as exc:
             last_error = exc
             continue
         any_success = True
-        LAST_COVERAGE.append(cov)
+        LAST_COVERAGE.append(Coverage(listing_url, 1, len(jobs) < DJINNI_PAGE_SIZE, None))
         for job in jobs:
             if job.url in seen_urls:
                 continue
