@@ -23,7 +23,7 @@
 | Дедуп рівень 2 | URL/ID; та сама компанія + порожній URL або назва посади в «Примітки» — «подано»; інакше прапорець «Компанія вже в таблиці» | Ж п.3, Л п.5 | `_tracker_check` |
 | «Майже підійшли» | щодня, ≤5 найсвіжіших, один м'який критерій (ЗП 25–30 тис., досвід >1.5 і ≤2, C1+, репост <7 днів) | И п.7, Л п.10 | `NEAR_MISS_*` |
 | Пошук | data/product analyst + AI analyst + CRM analyst на всіх 5 джерелах; DOU ще «data analyst», «AI» | Е п.1, Л п.6 | `scrapers/*` |
-| Покриття | до вакансій старших за 2 дні або кінця видачі, ≤5 сторінок (djinni ≥3); інакше «неповне покриття» | И п.8, Л п.6 | `scrapers/base.paginate` |
+| Покриття | до вакансій старших за 2 дні або кінця видачі, ≤5 сторінок; djinni — лише 1-ша сторінка кожного запиту (неповне, якщо 15 карток); інакше «неповне покриття» | И п.8, Л п.6 (оновл. 18.10) | `scrapers/base.paginate`, `djinni.DJINNI_PAGE_SIZE` |
 | Gmail | 2 доби, ≤50 тредів; hr@ і компанії зі списку (за відправником) — завжди; тред = лист | Крок 2, Л п.11 | `GMAIL_*`, `step2_mail.py` |
 | Фріланс | 1-2 дні; без дати — показ; Правило К (BAS/1С/M.E.Doc, ERP ≤10 000 грн, без бюджету + >40 ставок) | Крок 1.2, К, Л п.12 | `step1_2_freelance.py` |
 | Таблиця відгуків | репо не пише сам (автозапис вимкнено) | Л п.12 | `TRACKER_AUTO_UPDATE=False` |
@@ -212,11 +212,11 @@ High = сума 5–6 і A≠0, B≠0; Medium = 3–4; Low = 0–2 АБО A=0 А
 
 | Джерело | Запит |
 |---|---|
-| djinni.co | `/jobs/keyword-data_analyst/?employment=remote&exp_level=no_exp&exp_level=1y` (і product_analyst) |
+| djinni.co | `/jobs/keyword-data_analyst/?employment=remote&exp_level=no_exp&exp_level=1y` + `/jobs/?all_keywords=<product/ai/crm>+analyst&employment=remote&exp_level=no_exp&exp_level=1y`; лише 1-ша сторінка (page=2 скидає фільтри) |
 | jobs.dou.ua | `/vacancies/?category=Analyst&remote&exp=0-1` і `…&exp=1-3` |
 | robota.ua | API `/vacancy/search?keyWords=…&scheduleId=3`; повний текст — API `/vacancy?id=…` |
 | work.ua | `/jobs-remote-data+analyst/`, `/jobs-remote-product+analyst/` |
-| happymonday.ua | `/jobs-search/data-analyst`, `/jobs-search/product-analyst` (фільтра remote немає — формат лише за повним текстом) |
+| happymonday.ua | лише `/jobs-search/data-analyst` (інші — 404), пагінація `/page/N` (фільтра remote немає — формат лише за повним текстом) |
 
 ## Лог відсіву (формат спільний)
 

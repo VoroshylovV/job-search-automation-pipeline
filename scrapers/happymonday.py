@@ -18,11 +18,15 @@ LAST_COVERAGE: list[Coverage] = []
 
 BASE_URL = "https://happymonday.ua"
 LISTING_URLS = [
+    # 18.10.2026: product-analyst / ai-analyst / crm-analyst — 404 (таких
+    # сторінок на сайті немає), лишається тільки data-analyst.
     f"{BASE_URL}/jobs-search/data-analyst",
-    f"{BASE_URL}/jobs-search/product-analyst",
-    f"{BASE_URL}/jobs-search/ai-analyst",   # Правило И п.3 (18.10.2026)
-    f"{BASE_URL}/jobs-search/crm-analyst",
 ]
+
+
+def _page_url(url: str, n: int) -> str:
+    # Пагінація на сайті — шляхом /page/N (перевірено 18.10.2026), не ?page=N.
+    return url if n == 1 else f"{url.rstrip('/')}/page/{n}"
 
 # Посилання на вакансію: /jobs/<id>
 JOB_LINK_RE = re.compile(r"^/jobs/\d+/?$")
@@ -77,7 +81,7 @@ def scrape() -> Iterator[RawJobPosting]:
     for listing_url in LISTING_URLS:
         try:
             jobs, cov = paginate(
-                lambda n, u=listing_url: _parse_page(fetch(session, u, params={"page": n} if n > 1 else None).text),
+                lambda n, u=listing_url: _parse_page(fetch(session, _page_url(u, n)).text),
                 listing_url, max_pages=MAX_LISTING_PAGES, window_days=DATE_WINDOW_DAYS,
             )
         except ScraperError as exc:
