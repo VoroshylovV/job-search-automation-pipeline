@@ -333,3 +333,24 @@ def test_ba_with_zero_skill_matches_rejected_as_role_end_to_end():
         res = step1.run_step1(utc_today=TODAY, local_today=TODAY)
     assert res["vacancies"] == []
     assert res["decisions"][0]["code"] == "роль"
+
+
+def test_scrape_all_survives_unexpected_scraper_exception(monkeypatch):
+    """Непередбачений збій одного скрапера (не ScraperError) не губить решту джерел."""
+    from datetime import date
+    from pipeline import step1_vacancies as step1
+
+    class Boom:
+        @staticmethod
+        def scrape():
+            raise AttributeError("parse bug")
+
+    class Ok:
+        @staticmethod
+        def scrape():
+            return []
+
+    monkeypatch.setattr(step1, "SCRAPER_MODULES", {"djinni.co": Boom, "jobs.dou.ua": Ok})
+    jobs, statuses, _ = step1._scrape_all(date(2026, 10, 19))
+    assert statuses["djinni.co"].status == "недоступне"
+    assert statuses["jobs.dou.ua"].status == "OK"

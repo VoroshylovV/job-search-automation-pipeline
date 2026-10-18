@@ -303,6 +303,12 @@ def _scrape_all(today: date) -> tuple[list[RawJobPosting], dict[str, SourceStatu
             )
             collection_methods[source_name] = "не_встановлено"
             logger.warning("%s недоступне: %s", source_name, exc)
+        except Exception as exc:  # noqa: BLE001 - збій парсингу одного джерела не має губити решту
+            statuses[source_name] = SourceStatus(
+                source=source_name, status="недоступне", note=f"непередбачена помилка: {type(exc).__name__}: {exc}"
+            )
+            collection_methods[source_name] = "не_встановлено"
+            logger.exception("%s: непередбачена помилка скрапера", source_name)
     return all_jobs, statuses, collection_methods
 
 
@@ -578,7 +584,7 @@ def run_step1(utc_today: date | None = None, local_today: date | None = None) ->
     for k, i in enumerate(stage1_passed):
         ev2 = stage2_evals.get(k)
         if ev2 is None:
-            ev2 = {"passes_criteria": False, "reject_code": "інше", "reject_reason": "етап 2 без оцінки"}
+            ev2 = {**_eval_failed_marker(), "detail": "етап 2 без оцінки"}
         elif ev2.get("eval_failed"):
             ev2 = {**ev2, "detail": "етап 2"}
         eval_by_index[i] = ev2
@@ -601,7 +607,10 @@ def run_step1(utc_today: date | None = None, local_today: date | None = None) ->
     for i, job in enumerate(jobs_to_evaluate):
         ev = eval_by_index.get(i)
         if not ev:
-            decisions.append(_decision(job, "відсіяно", "інше", "модель не повернула оцінку", date_source=_date_source(job, None)))
+            # Модель пропустила вакансію — це збій оцінки, а не відсів:
+            # не маскуємо його під «відсіяно», рахуємо як не оцінену.
+            unevaluated_count += 1
+            decisions.append(_decision(job, EVAL_FAILED_RESULT, "помилка_Claude", "модель не повернула оцінку", date_source=_date_source(job, None)))
             continue
         if ev.get("eval_failed"):
             if ev.get("kind") == "budget":

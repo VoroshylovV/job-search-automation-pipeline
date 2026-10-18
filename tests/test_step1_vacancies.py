@@ -247,7 +247,7 @@ def test_decisions_log_covers_every_raw_job():
     assert by_url["https://example.com/0"]["result"] == "показано"
     assert by_url["https://example.com/1"]["code"] == "досвід"
     assert by_url["https://example.com/2"]["code"] == "дата"
-    assert by_url["https://example.com/3"]["code"] == "інше"
+    assert by_url["https://example.com/3"]["code"] == "помилка_Claude"
 
 
 def _run_with(jobs, evals, log_text="", tracker=None):
