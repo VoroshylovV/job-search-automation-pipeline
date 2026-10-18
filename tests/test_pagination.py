@@ -80,3 +80,12 @@ def test_happymonday_only_data_analyst_and_path_pagination():
     from scrapers import happymonday
     assert happymonday.LISTING_URLS == ["https://happymonday.ua/jobs-search/data-analyst"]
     assert happymonday._page_url(happymonday.LISTING_URLS[0], 2).endswith("/data-analyst/page/2")
+
+
+def test_happymonday_card_date_not_used():
+    """Останнє оновлення на картці ≠ дата публікації — posted_raw порожній."""
+    from scrapers import happymonday
+    html = ('<div><a href="/jobs/123">Junior Data Analyst</a>'
+            '<span class="job-date">1 день тому</span></div>')
+    jobs = happymonday._parse_page(html)
+    assert len(jobs) == 1 and jobs[0].posted_raw == ""

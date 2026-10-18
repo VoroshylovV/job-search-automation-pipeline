@@ -43,8 +43,10 @@ def _parse_card(card) -> RawJobPosting | None:
     company_el = card.find(class_=re.compile("company", re.I))
     company = company_el.get_text(strip=True) if company_el else ""
 
-    date_el = card.find(class_=re.compile("date|time", re.I))
-    posted_raw = date_el.get_text(strip=True) if date_el else ""
+    # 18.10.2026: на картці happymonday — «Останнє оновлення», а не дата публікації
+    # (EY: «1 день тому», реально опублікована 02.10). Дату з картки не беремо:
+    # вона береться з повного тексту («Опублікована: …»), як для djinni.
+    posted_raw = ""
 
     full_text = card.get_text(" ", strip=True)
 
