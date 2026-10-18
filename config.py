@@ -33,9 +33,12 @@ MAX_FULLTEXT_VACANCIES = 10
 # Ліміт вартості Claude за запуск (USD). Крок 1 перестає викликати API, коли
 # вартість сягає MAX_RUN_COST_USD - BUDGET_RESERVE_LATER_STEPS_USD (резерв для
 # Кроків 1.2 і 2, що йдуть далі); решта вакансій — «не оцінено (ліміт бюджету)».
-# 0.60: етап 1 на Sonnet коштує ≈ 3× Haiku (≈ $0.35 замість $0.12), з лімітом
-# 0.30 Крок 1 зупинявся б на середині. З Haiku на етапі 1 вистачало 0.30.
-MAX_RUN_COST_USD = float(os.environ.get("MAX_RUN_COST_USD", "0.60"))
+# 1.00 (18.10.2026): тестовий прогін на Sonnet 5.5 з лімітом 0.60 зупинився на
+# $0.655 — 5 батчів карток по 20 (≈ $0.13 кожен, переважно вихідні токени),
+# 49 з 149 вакансій не оцінено, етап 2 не запустився. Разом зі стислим
+# виводом етапу 1 (prompts.VACANCY_STAGE_CARD) очікувано ≈ $0.8–0.9 за запуск.
+# Історія: 0.30 (Haiku на етапі 1) → 0.60 (план тижня C) → 1.00.
+MAX_RUN_COST_USD = float(os.environ.get("MAX_RUN_COST_USD", "1.00"))
 BUDGET_RESERVE_LATER_STEPS_USD = 0.05
 
 GOOGLE_CREDENTIALS_PATH = os.environ.get(

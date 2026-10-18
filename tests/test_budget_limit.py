@@ -44,7 +44,7 @@ def _scrape(jobs):
 
 def test_defaults():
     import config
-    assert config.MAX_RUN_COST_USD == 0.60 and config.BUDGET_RESERVE_LATER_STEPS_USD == 0.05
+    assert config.MAX_RUN_COST_USD == 1.00 and config.BUDGET_RESERVE_LATER_STEPS_USD == 0.05
 
 
 def test_call_json_refuses_over_budget_without_calling_api(monkeypatch):
@@ -116,6 +116,6 @@ def test_selfcheck_reports_budget_skips_and_cost(monkeypatch):
     r = s4.run_step4({"source_statuses": sources, "dedup_level_used": 1, "vacancies": [],
                       "total_found_before_filters": 10, "budget_unevaluated_count": 4, "collection_methods": {}},
                      {}, {"saved": True}, "2026-10-10 12:00 UTC")["result"]
-    assert "Вартість Claude: $0.225 (ліміт $0.60" in r.notes
+    assert "Вартість Claude: $0.225 (ліміт $1.00" in r.notes
     assert r.step1_status == "ЧАСТКОВО" and "4 вакансій не оцінено (ліміт бюджету)" in r.step1_note
     assert not r.trend_comparable
