@@ -357,12 +357,15 @@ def test_junior_middle_title_not_stopped_and_capped_medium():
 
 
 def test_near_miss_from_model_listed_and_logged_not_shown():
-    evals = [{**_eval(i, passes=False, posted_date=f"2026-10-0{i + 1}"), "reject_code": "ЗП",
-              "near_miss": True, "near_miss_reason": "ЗП 28 000 грн"} for i in range(7)]
+    # 6 у вікні (09.10 / 08.10), 1 стара (05.10) — стара не йде в «Майже» (уже два критерії)
+    dates = ["2026-10-08", "2026-10-09", "2026-10-08", "2026-10-09", "2026-10-08", "2026-10-09", "2026-10-05"]
+    evals = [{**_eval(i, passes=False, posted_date=d), "reject_code": "ЗП",
+              "near_miss": True, "near_miss_reason": "ЗП 28 000 грн"} for i, d in enumerate(dates)]
     res = _run_with([_job(i) for i in range(7)], evals)
     assert res["vacancies"] == []
     assert len(res["near_misses"]) == 5
-    assert [n.posted_date for n in res["near_misses"]][0] == "2026-10-07"  # найсвіжіші першими
+    assert [n.posted_date for n in res["near_misses"]][0] == "2026-10-09"  # найсвіжіші першими
+    assert "2026-10-05" not in [n.posted_date for n in res["near_misses"]]
     results = [d["result"] for d in res["decisions"]]
     assert results.count("майже") == 5 and results.count("відсіяно") == 2
 
