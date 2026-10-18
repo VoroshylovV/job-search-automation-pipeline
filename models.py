@@ -201,6 +201,8 @@ class RunMetrics:
     notes: str = ""
     cost_total_usd: float = 0.0  # вартість Claude за запуск, USD
     cost_per_shown_usd: Optional[float] = None  # None -> "н/д" (нічого не показано)
+    model_cards: str = ""     # «Sonnet 5.5» — модель етапу 1 (картки), з 19.10.2026
+    model_fulltext: str = ""  # модель етапу 2 (повні тексти)
 
     def as_row(self) -> list:
         s = self.source_statuses
@@ -222,6 +224,8 @@ class RunMetrics:
             self.notes or "без зауважень",
             round(self.cost_total_usd, 4),
             "н/д" if self.cost_per_shown_usd is None else round(self.cost_per_shown_usd, 4),
+            self.model_cards,
+            self.model_fulltext,
         ]
 
 
@@ -243,6 +247,9 @@ METRICS_HEADER = [
     "Примітки",
     "Вартість Claude, $ разом",
     "Вартість Claude, $ на показану вакансію",
+    # 19.10.2026: назви 1:1 з колонками R:S, які вже є в таблиці метрик (тест гітхаб).
+    "Модель крок 1 (картки)",
+    "Модель крок 2 (повні тексти)",
 ]
 
 

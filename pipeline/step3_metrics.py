@@ -6,12 +6,22 @@ import logging
 from datetime import date
 
 from claude_orchestrator.cost import tracker as cost_tracker
-from config import METRICS_SHEET_TITLE, RESUME_FOLDER_ID
+from config import CLAUDE_MODEL_CARDS, CLAUDE_MODEL_FULLTEXT, METRICS_SHEET_TITLE, RESUME_FOLDER_ID
 from google_services import drive, sheets
 from models import RunMetrics
 
 logger = logging.getLogger(__name__)
 
+
+
+def model_label(model_id: str) -> str:
+    """«claude-sonnet-5-5» → «Sonnet 5.5», «claude-haiku-4-5-20251001» → «Haiku 4.5»
+    (той самий формат, що вже вписано вручну в таблицю метрик)."""
+    import re
+    m = re.match(r"claude-([a-z]+)-(\d+)(?:-(\d{1,2}))?(?:-\d{8})?$", (model_id or "").strip())
+    if not m:
+        return model_id or ""
+    return f"{m[1].capitalize()} {m[2]}" + (f".{m[3]}" if m[3] else "")
 
 def _get_or_create_metrics_sheet() -> str:
     existing = drive.find_file_by_title(METRICS_SHEET_TITLE, RESUME_FOLDER_ID)
@@ -51,6 +61,8 @@ def run_step3(
         # тож сума тут уже повна.
         cost_total_usd=cost_tracker.total_usd,
         cost_per_shown_usd=(cost_tracker.total_usd / len(vacancies)) if vacancies else None,
+        model_cards=model_label(CLAUDE_MODEL_CARDS),
+        model_fulltext=model_label(CLAUDE_MODEL_FULLTEXT),
     )
 
     notes = []
