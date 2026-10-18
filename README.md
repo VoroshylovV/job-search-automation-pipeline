@@ -33,7 +33,7 @@ flowchart TB
 
     subgraph S1["Крок 1. Вакансії"]
         direction LR
-        SC["Scrapers<br/>Djinni, DOU, Robota, Work.ua, HappyMonday"] --> DD["Дедуплікація 21 день<br/>фільтр за датою"] --> C1["Claude API<br/>оцінка релевантності"]
+        SC["Scrapers<br/>Djinni, DOU, Robota, Work.ua, HappyMonday"] --> DD["Дедуплікація за ID (21 день)<br/>дата з картки, стоп за назвою"] --> C1["Claude, етап 1: картка<br/>компактний JSON"] --> C1B["Claude, етап 2: повний текст<br/>ліміт 10, дедуп за компанією, репост"]
     end
 
     subgraph S12["Крок 1.2. Фріланс"]
@@ -47,14 +47,14 @@ flowchart TB
         GM[Gmail] --> RX["regex: HR-домени,<br/>список компаній"] --> C2["Claude API<br/>класифікація листів"]
     end
 
-    C1 --> S3
+    C1B --> S3
     C12 --> S4
     C2 --> S3
 
     subgraph S3["Крок 3. Метрики й трекер"]
         direction LR
         M["Лічильники в Python"]
-        T["Оновлення таблиці відгуків<br/>відмова або запрошення"]
+        T["Оновлення таблиці відгуків<br/>(вимкнено: TRACKER_AUTO_UPDATE=False)"]
     end
 
     S3 --> S4["Крок 4. Self-check<br/>OK / PARTIAL / NOT DONE"]
@@ -100,6 +100,8 @@ pipeline/                 — step1_vacancies.py, step1_2_freelance.py, step2_ma
 tg_market/                — окремий модуль аналітики ринку IT-вакансій у Telegram-каналах
                              (не імпортується main.py) — див. tg_market/README.md
 scripts/                  — run_pipeline.bat + register_windows_task.ps1 (щоденний запуск на Windows)
+                             cost_log.py (журнал вартості), reject_log.py (лог причин відсіву)
+scrapers/base.py          — спільна пагінація (paginate), Coverage, age_days; detail.py — повний текст вакансії
 main.py                   — точка входу, формує фінальний звіт (report_<дата>.md) і шле push
 tests/                     — pytest, усі Google/Claude API замоковано (див. "Тести" нижче)
 conftest.py                — гарантує корінь репо на sys.path для тестів
@@ -119,7 +121,7 @@ CRM-аналітика (Ops/Business — лише з SQL); досвід до 1.5
 
 ## Вартість запуску
 
-Бюджет API — $8.83 до 05.11.2026 (26 запусків), **ціль ≤ $0.33 за запуск**.
+Бюджет API — $8.83 до 05.11.2026 (26 запусків), **ціль ≤ $0.33 за запуск** (до тижня C; з 19.10.2026 тест із Sonnet 5.5 на обох етапах, ліміт $1.00, фактична ціна — у `logs/costs.csv`).
 Базова лінія 10.10.2026 (коміт `07b44cc`, одна модель на всі етапи): **$0.43**,
 123 знайдено, 2 показано. Поточна ціна — останній рядок
 `logs/costs.csv` (локальний файл на ПК, у git не комітиться; базова лінія — [docs/costs_baseline.csv](docs/costs_baseline.csv)) (колонка `total_usd`, розкладка по етапах
@@ -173,7 +175,7 @@ pip install -r requirements-dev.txt
 pytest -v
 ```
 
-Усі тести (`tests/`, 46 штук) мокають Google Drive/Docs/Sheets і виклик
+Усі тести (`tests/`, 161 на гілці week-c) мокають Google Drive/Docs/Sheets і виклик
 Claude API (`unittest.mock.patch`) — не потребують ні `credentials/`, ні
 `ANTHROPIC_API_KEY`, ні мережі, і ганяються за долі секунди. Покривають:
 дворівневу дедублікацію Кроку 1 (лог -> фолбек на таблицю відгуків),
@@ -181,8 +183,10 @@ Claude API (`unittest.mock.patch`) — не потребують ні `credentia
 ліміт `UNKNOWN_DATE_FALLBACK_LIMIT` для вакансій з невизначеною датою,
 рівні конкуренції фрілансу (`_competition_level`), деривацію статусів
 Кроку 4 (`_step1_status`/`_step1_2_status`), і Крок 5 (порівняння
-канонічних/тестових даних, підрахунок перетину URL). Той самий набір ганяє GitHub
-Actions на кожен push/PR у `main` (`.github/workflows/tests.yml`) — бейдж
+канонічних/тестових даних, підрахунок перетину URL). Додатково: бюджет і облік вартості,
+компактний вивід карток, дату перед карткою, пагінацію джерел, ліміт етапу 2, Правило К
+(Freelancehunt) та вибір моделі по етапах. Той самий набір ганяє GitHub
+Actions на кожен push/PR у `main` (гілка `week-c` у CI не запускається — тести ганяються локально) (`.github/workflows/tests.yml`) — бейдж
 угорі README.
 
 ## Запуск
