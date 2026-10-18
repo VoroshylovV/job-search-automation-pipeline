@@ -61,7 +61,7 @@ from config import (
 from google_services import docs, drive, sheets
 from models import NearMissVacancy, RawJobPosting, ScoredVacancy, SourceStatus
 from scrapers import SCRAPER_MODULES
-from scrapers.base import ScraperError, coverage_status
+from scrapers.base import ScraperError, age_days, coverage_status
 from scrapers.detail import fetch_full_text
 
 logger = logging.getLogger(__name__)
@@ -511,12 +511,21 @@ def run_step1(utc_today: date | None = None, local_today: date | None = None) ->
     # Claude оцінює лише те, що не відфільтровано вище, одним викликом на
     # шматок (config.CLAUDE_EVAL_CHUNK_SIZE) — за потреби зменш його там,
     # якщо контекст завеликий.
-    # Етап 0 (детерміновано, без Claude): явний рівень вище Junior у назві
+    # Етап 0 (детерміновано, без Claude): дата з картки поза вікном, явний рівень вище Junior у назві
     # і вакансії без URL (у звіті вакансія без посилання невалідна — Правило
     # В онлайн-промпту від 02.10.2026).
     remaining: list[RawJobPosting] = []
     cap_medium_urls: set[str] = set()  # «Junior/Middle», «Strong Junior»: Match не вище Medium
     for j in jobs_to_evaluate:
+        # Правило Л п.4 (оновл. 18.10.2026): дата з картки перевіряється ДО
+        # оцінки Claude — інакше місця етапу 2 (ліміт 10) і гроші йшли на
+        # вакансії поза вікном «сьогодні/вчора», які все одно відсіювались.
+        # Дата не розпізнана — вакансія йде далі, дату перевірить етап 2.
+        age = age_days(j.posted_raw, local_today)
+        if age is not None and age >= DATE_WINDOW_DAYS:
+            decisions.append(_decision(j, "відсіяно", "дата", f"поза вікном сьогодні/вчора (картка, {age} дн.)",
+                                       (local_today - timedelta(days=age)).isoformat(), "картка"))
+            continue
         m = _SENIORITY_RE.search(j.title or "")
         if m and _JUNIOR_RE.search(j.title or ""):
             cap_medium_urls.add(j.url or "")
