@@ -268,10 +268,15 @@ def run_step1_2(utc_today: date | None = None, local_today: date | None = None) 
         for start in range(0, len(projects_to_evaluate), CLAUDE_EVAL_CHUNK_SIZE):
             chunk = projects_to_evaluate[start : start + CLAUDE_EVAL_CHUNK_SIZE]
             prompt = build_freelance_eval_prompt(chunk, today=local_today)
-            result = call_json(prompt, stage="freelance")
+            try:
+                result = call_json(prompt, stage="freelance")
+            except Exception as exc:  # noqa: BLE001 - збій одного батча не губить решту Кроку 1.2
+                logger.error("Фріланс: батч з %d проєктів не оцінено (помилка Claude): %s", len(chunk), exc)
+                continue
             for ev in result.get("evaluations", []):
-                ev["raw_index"] += start
-            evaluations.extend(result.get("evaluations", []))
+                if isinstance(ev.get("raw_index"), int):
+                    ev["raw_index"] += start
+                    evaluations.append(ev)
     eval_by_index = {ev["raw_index"]: ev for ev in evaluations}
 
     scored: list[ScoredFreelanceProject] = []

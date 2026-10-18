@@ -123,7 +123,7 @@ def run_step2(company_names: list[str] | None = None) -> dict:
                 "company_names": company_names, "notes": notes, **thread_stats}
 
     static, dynamic = build_email_classify_parts(raw_emails)
-    result = call_json(dynamic, stage="mail", model=CLAUDE_MODEL_FULLTEXT, cache_prefix=static)
+    result = call_json(dynamic, stage="mail", model=CLAUDE_MODEL_FULLTEXT, cache_prefix=static, max_tokens=12000)
     eval_by_index = {ev["index"]: ev for ev in result.get("evaluations", [])}
 
     company_names_lower = {c.lower() for c in company_names}
