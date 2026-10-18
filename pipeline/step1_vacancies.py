@@ -306,6 +306,18 @@ def _scrape_all(today: date) -> tuple[list[RawJobPosting], dict[str, SourceStatu
     return all_jobs, statuses, collection_methods
 
 
+def _in_window(posted_date: str | None, today: date, yesterday: date) -> bool:
+    """«Майже підійшли» — рівно ОДИН м'який критерій не виконано (Правило И п.7),
+    тож вакансія з відомою датою поза вікном сьогодні/вчора туди не йде (це вже
+    другий невиконаний критерій). Дата невідома — не перешкода."""
+    if not posted_date:
+        return True
+    try:
+        return datetime.fromisoformat(posted_date).date() in (today, yesterday)
+    except ValueError:
+        return True
+
+
 def _decision(job: RawJobPosting, result: str, code: str, detail: str = "",
               posted_date: str | None = None, date_source: str = "") -> dict:
     """Рядок діагностичного логу причин відсіву (див. pipeline/reject_log.py)."""
@@ -606,7 +618,7 @@ def run_step1(utc_today: date | None = None, local_today: date | None = None) ->
             code = ev.get("reject_code") or "інше"
             reason = ev.get("reject_reason") or ""
             dsrc = _date_source(job, ev, i in full_text_indices)
-            if ev.get("near_miss"):
+            if ev.get("near_miss") and _in_window(ev.get("posted_date"), local_today, local_yesterday):
                 near_candidates.append((job, NearMissVacancy(
                     title=ev.get("normalized_title") or job.title, company=ev.get("normalized_company") or job.company,
                     source=job.source, url=job.url or "", unmet=ev.get("near_miss_reason") or reason,
