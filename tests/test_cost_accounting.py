@@ -97,9 +97,19 @@ def test_metrics_row_has_cost_columns_matching_header():
     m = RunMetrics(run_date="2026-10-11", cost_total_usd=0.31234, cost_per_shown_usd=0.1562)
     row = m.as_row()
     assert len(row) == len(METRICS_HEADER)
-    assert METRICS_HEADER[-2:] == ["Вартість Claude, $ разом", "Вартість Claude, $ на показану вакансію"]
-    assert row[-2:] == [0.3123, 0.1562]
-    assert RunMetrics(run_date="d").as_row()[-1] == "н/д"
+    assert METRICS_HEADER[-4:-2] == ["Вартість Claude, $ разом", "Вартість Claude, $ на показану вакансію"]
+    assert METRICS_HEADER[-2:] == ["Модель крок 1 (картки)", "Модель крок 2 (повні тексти)"]
+    assert row[-4:-2] == [0.3123, 0.1562]
+    assert RunMetrics(run_date="d").as_row()[-3] == "н/д"
+    assert RunMetrics(run_date="d", model_cards="Sonnet 5.5", model_fulltext="Sonnet 5.5").as_row()[-2:] == ["Sonnet 5.5", "Sonnet 5.5"]
+
+
+def test_model_label():
+    from pipeline.step3_metrics import model_label
+    assert model_label("claude-sonnet-5-5") == "Sonnet 5.5"
+    assert model_label("claude-haiku-4-5-20251001") == "Haiku 4.5"
+    assert model_label("claude-sonnet-4-5-20250929") == "Sonnet 4.5"
+    assert model_label("claude-opus-5") == "Opus 5"
 
 
 def test_selfcheck_note_has_total_and_stage_breakdown():
