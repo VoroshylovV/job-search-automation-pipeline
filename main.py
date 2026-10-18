@@ -18,10 +18,12 @@ import sys
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
+from claude_orchestrator.cost import tracker as cost_tracker
 from config import CANDIDATE_LOCAL_TZ, COMPARISON_SHEET_TITLE
 from google_services import notify
 from pipeline.step1_2_freelance import run_step1_2
 from pipeline.step1_vacancies import run_step1
+from pipeline.cost_log import append_cost_row, build_row
 from pipeline.reject_log import write_reject_log
 from pipeline.step2_mail import run_step2
 from pipeline.step3_metrics import run_step3
@@ -61,8 +63,12 @@ _root_logger.addHandler(_file_handler)
 logger = logging.getLogger("main")
 
 
+_FREELANCE_SOURCE_LABEL = {"freelancehunt.com": "Freelancehunt", "telegram": "Telegram"}
+
+
 def _format_freelance_project(v) -> list[str]:
-    lines = [f"- **{v.title}** | {v.category} | [{v.source}]({v.url})"]
+    label = _FREELANCE_SOURCE_LABEL.get(v.source, v.source)
+    lines = [f"- **{v.title}** | {v.category} | [{label}]({v.url})"]
     if v.competition_level:
         lines.append(f"  - Кількість ставок: {v.bids_count} ({v.competition_level} конкуренція)")
     lines.append(f"  - Бюджет: {v.budget_raw or 'не вказано'}")
@@ -89,24 +95,44 @@ def format_report(
         for v in vacancies:
             lines.append(f"- **{v.title}** | {v.company} | [{v.source}]({v.url or 'н/д'})")
             lines.append(f"  - Match-рівень: {v.match_level}")
-            lines.append(f"  - Оцінка відповідності: {v.match_reasoning}")
+            # Позначки — у «Оцінка відповідності», як в онлайн-промпті (Крок 1 п.2, Правило И).
+            marks = list(v.flags) + (["лише картка"] if v.card_only else [])
+            reasoning = v.match_reasoning + (f" [{'; '.join(marks)}]" if marks else "")
+            lines.append(f"  - Оцінка відповідності: {reasoning}")
             lines.append(f"  - Ветеранські бонуси: {'так' if v.veteran_bonus else 'ні'}")
             loc = "так" if v.low_match_location else "ні"
             if v.low_match_location:
                 loc += f" ({v.low_match_location_reason})"
-            lines.append(f"  - Low match через локацію: {loc}")
+            lines.append(f"  - Обмеження локації: {loc}")
+            if v.company_flag:
+                lines.append(f"  - Прапорець: {v.company_flag}")
             date_str = "невизначена" if v.date_undetermined else (v.posted_date or "невизначена")
             lines.append(f"  - Дата публікації: {date_str}\n")
 
-    unavailable = [
-        s.source for s in step1_result["source_statuses"].values() if s.status == "недоступне"
-    ]
-    if unavailable:
-        lines.append(f"⚠️ Недоступні джерела в цьому запуску: {', '.join(unavailable)}\n")
+    # Блок «Майже підійшли» — щодня, одразу після основного списку (Правило И п.7).
+    near = step1_result.get("near_misses") or []
+    lines.append("**Майже підійшли**" + ("" if near else ": немає"))
+    for nm in near:
+        lines.append(f"- **{nm.title}** | {nm.company} | [{nm.source}]({nm.url}) | не виконано: {nm.unmet}")
+    lines.append("")
+
+    # Статуси всіх джерел — окремим рядком після списку (Правило В, И п.8).
+    status_parts = []
+    for st in step1_result["source_statuses"].values():
+        status_parts.append(f"{st.source}: {st.status}")
+    if status_parts:
+        lines.append("Статуси джерел: " + "; ".join(status_parts) + "\n")
+
+    # Службові подробиці — окремим блоком «Примітки», не всередині списку.
+    notes: list[str] = []
     if step1_result.get("dedup_log_note"):
-        lines.append(f"⚠️ {step1_result['dedup_log_note']}\n")
+        notes.append(step1_result["dedup_log_note"])
     if step1_result.get("unknown_date_note"):
-        lines.append(f"⚠️ {step1_result['unknown_date_note']}\n")
+        notes.append(step1_result["unknown_date_note"])
+    if notes:
+        lines.append("**Примітки**")
+        lines.extend(f"- ⚠️ {n}" for n in notes)
+        lines.append("")
 
     lines.append("\n## Крок 1.2 — фріланс-проєкти\n")
     projects = step1_2_result.get("projects", [])
@@ -115,6 +141,14 @@ def format_report(
     else:
         for v in projects:
             lines.extend(_format_freelance_project(v))
+        # «не знайдено» окремо по кожному з трьох джерел, якщо різниця є.
+        groups = {"BI и аналитика данных": "Freelancehunt — BI и аналитика данных",
+                  "Базы данных и SQL": "Freelancehunt — Базы данных и SQL", "Telegram": "Telegram-канал"}
+        present = {("Telegram" if v.source == "telegram" else v.category) for v in projects}
+        for key, name in groups.items():
+            if key not in present:
+                lines.append(f"{name}: нових релевантних фріланс-проєктів не знайдено.")
+        lines.append("")
 
     fl_unavailable = [
         s.source for s in step1_2_result.get("source_statuses", {}).values() if s.status == "недоступне"
@@ -133,6 +167,8 @@ def format_report(
             status_str = f" | Статус: {f.status}" if f.status else ""
             lines.append(f"- {f.sender} | {f.subject} | {f.date}{status_str}")
             lines.append(f"  {f.summary}\n")
+    for note in step2_result.get("notes") or []:
+        lines.append(f"⚠️ {note}")
 
     lines.append("\n## Крок 3 — метрики\n")
     if step3_result.get("saved"):
@@ -170,6 +206,7 @@ def main() -> int:
     # (4.4 і 4.5) — аналог одноразового `date -u` в чат-версії промпту.
     selfcheck_timestamp = utc_now.strftime("%Y-%m-%d %H:%M") + " UTC"
 
+    cost_tracker.reset()  # вартість Claude рахується окремо за кожен запуск
     logger.info("=== Запуск пайплайна: %s (UTC) / %s (%s) ===", utc_today.isoformat(), local_today.isoformat(), CANDIDATE_LOCAL_TZ)
 
     try:
@@ -220,7 +257,8 @@ def main() -> int:
         step2_result = run_step2()
     except Exception:
         logger.exception("Крок 2 критично провалився")
-        step2_result = {"findings": [], "total_emails_found": 0, "hr_domain_emails": 0, "known_company_emails": 0}
+        step2_result = {"findings": [], "total_emails_found": 0, "hr_domain_emails": 0, "known_company_emails": 0,
+                        "error": "Крок 2 критично провалився, див. лог помилок"}
 
     # Крок 3/4 + звіт у try/finally: push-повідомлення (нижче) має піти
     # БЕЗУМОВНО, навіть якщо щось у Кроці 3/4/формуванні звіту несподівано
@@ -255,6 +293,13 @@ def main() -> int:
             logger.exception("Крок 5 (порівняння) критично провалився")
             step5_result = {"active": False}
 
+        # Журнал вартості logs/costs.csv (docs/COSTS.md) — окремий try: збій
+        # запису не повинен ховати звіт.
+        try:
+            append_cost_row(build_row(selfcheck_timestamp, step1_result, step4_result["result"], step5_result))
+        except Exception:
+            logger.exception("Запис у logs/costs.csv не вдався")
+
         report = format_report(
             step1_result, step1_2_result, step2_result, step3_result, step4_result, step5_result
         )
@@ -268,6 +313,7 @@ def main() -> int:
         # Наприкінці — push-повідомлення, БЕЗУМОВНО (навіть якщо щось вище
         # провалилось): Володимир хоче знати, коли звіт готовий для
         # перегляду, незалежно від того, чи є в ньому щось "цікаве".
+        logger.info("Вартість Claude за запуск: $%.4f (%d викликів)", cost_tracker.total_usd, cost_tracker.calls)
         notify.send_push()
 
     return 0

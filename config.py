@@ -21,7 +21,18 @@ load_dotenv()  # читає .env у робочій директорії, якщ�
 # (див. .env.example). Google credentials — з credentials/credentials.json
 # (OAuth client secret, завантажений з Google Cloud Console).
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
-CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-5-20250929")
+CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "claude-sonnet-5-5")
+# Дешева модель для етапу 1 (оцінка карток) і сильніша для етапу 2 (повний
+# текст) та Кроку 2 (пошта). Бюджет API: $8.83 до 05.11.2026 (~$0.30/запуск).
+CLAUDE_MODEL_CARDS = os.environ.get("CLAUDE_MODEL_CARDS", "claude-haiku-4-5-20251001")
+CLAUDE_MODEL_FULLTEXT = os.environ.get("CLAUDE_MODEL_FULLTEXT", CLAUDE_MODEL)
+# Етап 2 (повний текст, дорогий): не більше стільки вакансій, лише High/Medium з етапу 1.
+MAX_FULLTEXT_VACANCIES = 10
+# Ліміт вартості Claude за запуск (USD). Крок 1 перестає викликати API, коли
+# вартість сягає MAX_RUN_COST_USD - BUDGET_RESERVE_LATER_STEPS_USD (резерв для
+# Кроків 1.2 і 2, що йдуть далі); решта вакансій — «не оцінено (ліміт бюджету)».
+MAX_RUN_COST_USD = float(os.environ.get("MAX_RUN_COST_USD", "0.30"))
+BUDGET_RESERVE_LATER_STEPS_USD = 0.05
 
 GOOGLE_CREDENTIALS_PATH = os.environ.get(
     "GOOGLE_CREDENTIALS_PATH", "credentials/credentials.json"
@@ -99,6 +110,10 @@ TRACKER_SHEET_TITLE = "Ворошилов відгуки на вакансії"
 TRACKER_SHEET_NAME = "Interview"  # вкладка з відгуками
 TRACKER_URL_COLUMN_HEADER = "Посилання на вакансію"
 TRACKER_COMPANY_COLUMN_HEADER = "Компанія"
+# Заголовок «дата» в таблиці повторюється (відгук, співбесіди); find_header_row
+# бере перший збіг — дату відгуку одразу після «Компанія». Назви посади в
+# таблиці окремої колонки немає (вільний текст у «Примітки») — за нею не звіряємо.
+TRACKER_DATE_COLUMN_HEADER = "дата"
 TRACKER_RESULT_COLUMN_HEADER = "Результат відгуку"
 TRACKER_NOTES_COLUMN_HEADER = "Примітки"
 
@@ -106,7 +121,7 @@ TRACKER_NOTES_COLUMN_HEADER = "Примітки"
 # ставить "Результат відгуку" = відмова + примітку, "запрошення на
 # співбесіду" — лише примітку. Кілька рядків однієї компанії без явної
 # вказівки на вакансію -> пропуск (див. pipeline/step3_tracker.py).
-TRACKER_AUTO_UPDATE = True
+TRACKER_AUTO_UPDATE = False  # 18.10.2026: вимкнено — онлайн-версія таблицю з листів не оновлює (A/B)
 
 # Файл Кроку 4 — самоперевірка запуску (аудит-лог, без обмеження за
 # довжиною, на відміну від дедуп-логу).
@@ -157,7 +172,13 @@ CANDIDATE_LOCAL_TZ = "Europe/Warsaw"
 class CandidateProfile:
     name: str = "Володимир Ворошилов"
     location: str = "Zawadzkie, Польща"
-    target_roles: tuple[str, ...] = ("Junior Data Analyst", "Junior Product Analyst")
+    target_roles: tuple[str, ...] = (
+        "Junior Data Analyst", "Junior Product Analyst",
+        # Правило И п.3 (18.10.2026): AI-аналітика і CRM-аналітика.
+        "AI Data Analyst / LLM-AI quality / prompt-evaluation analyst / AI Operations Analyst",
+        "CRM-аналітик",
+        "Operations / Systems / Business Data Analyst із SQL у вимогах",
+    )
     background: str = (
         "8+ років бекграунду в telecom/ops до переходу в аналітику даних, "
         "пройшов курс GoIT Data Analyst (сертифікат «Пройдено»)"
@@ -176,7 +197,8 @@ CANDIDATE = CandidateProfile()
 # Критерії фільтрації вакансій (Крок 1)
 # --------------------------------------------------------------------------
 MAX_EXPERIENCE_YEARS = 1.5
-MIN_SALARY_UAH = 40_000
+MIN_SALARY_UAH = 30_000  # Правило И п.2 (18.10.2026), було 40 000
+MIN_SALARY_USD_APPROX = 720  # ≈ 30 000 грн, те саме число, що в промпті
 MAX_ENGLISH_LEVEL = "B2"  # виключає C1+
 DATE_WINDOW_DAYS = 2  # "сьогодні або вчора"
 # Дату не завжди вдається розпізнати (ні скрапер, ні Claude не витягли
@@ -193,11 +215,25 @@ DATE_WINDOW_DAYS = 2  # "сьогодні або вчора"
 # більше 5 вакансій за запуск. Те саме значення — в онлайн-промпті.
 UNKNOWN_DATE_FALLBACK_LIMIT = 5
 
+# Правило И (18.10.2026), однаково з онлайн-промптом.
+# Репост ≠ дубль: нова вакансія (новий ID) з тією самою парою «компанія + посада»,
+# що вже є в Лозі показаних, — дубль лише якщо показ був менше REPOST_DUP_DAYS днів
+# тому або є відгук у таблиці; інакше показується з позначкою «репост».
+REPOST_DUP_DAYS = 7
+# Блок «Майже підійшли»: до NEAR_MISS_LIMIT вакансій, відсіяних рівно за одним
+# м'яким критерієм; ЗП у діапазоні NEAR_MISS_MIN_SALARY_UAH..MIN_SALARY_UAH.
+NEAR_MISS_LIMIT = 5
+NEAR_MISS_MIN_SALARY_UAH = 25_000
+# Виняток зі стопу за назвою: «Junior/Middle», «junior or middle», «Strong Junior».
+JUNIOR_IN_TITLE_PATTERN = r"\b(junior|джуніор|джун|strong\s+junior)\b"
+
 # Скільки вакансій/проєктів Claude оцінює за один виклик API (crop 1 і
 # крок 1.2). Виділено в конфіг, а не захардкоджено в pipeline-модулях, щоб
 # можна було зменшити без правки коду, якщо контекст-вікно чи бюджет
 # виклику стане тісним.
-CLAUDE_EVAL_CHUNK_SIZE = 40
+CLAUDE_EVAL_CHUNK_SIZE = 20  # 15-20: 40 за раз обрізало відповідь (09.10.2026)
+# Ліміт виводу для оцінки вакансій; при stop_reason=max_tokens батч ділиться навпіл.
+CLAUDE_EVAL_MAX_TOKENS = 12000
 # Етап 2 (повний текст, до scrapers.detail.FULL_TEXT_MAX_CHARS символів на
 # вакансію) — менші порції, щоб не впертися в ліміт виводу/контексту.
 CLAUDE_FULL_EVAL_CHUNK_SIZE = 8
@@ -212,6 +248,13 @@ SENIORITY_STOP_PATTERN = (
 )
 
 SOURCES = ("djinni.co", "jobs.dou.ua", "robota.ua", "work.ua", "happymonday.ua")
+
+# Пагінація (Правило И п.8, 18.10.2026): гортати сторінки, доки не з'являться
+# вакансії старші за вікно свіжості або не скінчиться видача; djinni — мінімум
+# 3 сторінки (дат на картках немає). MAX_LISTING_PAGES — запобіжник: якщо
+# зупинились на ньому, джерело отримує статус «неповне покриття».
+MAX_LISTING_PAGES = 5
+DJINNI_MIN_PAGES = 3
 
 # --------------------------------------------------------------------------
 # Крок 1.2 — фріланс-проєкти (Freelancehunt + Telegram-канал)
@@ -265,6 +308,21 @@ FREELANCEHUNT_SKILL_IDS = {
 FREELANCEHUNT_LOW_BIDS_MAX = 14  # < 15 -> "низька"
 FREELANCEHUNT_MEDIUM_BIDS_MAX = 40  # 15-40 -> "середня", > 40 -> "висока"
 
+# Жорсткий відсів Freelancehunt ДО оцінки Claude (18.10.2026, однаково з
+# онлайн-промптом, Правило К). Приклад: проєкт 1658459 — автоматичне
+# планування в ERP, 29 ставок, замовник очікує 5–10 тис. грн за 2–4 дні.
+# 1) специфічна облікова система (BAS / 1С) — відсів завжди;
+# 2) ERP / автоматичне планування з бюджетом до FREELANCE_SMALL_BUDGET_UAH
+#    або без бюджету — відсів;
+# 3) бюджет не вказано і конкуренція висока (> FREELANCEHUNT_MEDIUM_BIDS_MAX) — відсів.
+FREELANCE_SPECIFIC_SYSTEM_PATTERN = r"\bbas\b|\b1\s?[сc]\b|\b1\s?[сc][:\-]|\bm\.?\s?e\.?\s?doc\b|\bм\.?\s?е\.?\s?док"
+FREELANCE_ERP_PLANNING_PATTERN = (
+    r"\berp\b|автоматичн\w*\s+планув|автоматическ\w*\s+планир|"
+    r"планування\s+виробництва|планирование\s+производства"
+)
+FREELANCE_SMALL_BUDGET_UAH = 10_000
+FREELANCE_USD_TO_UAH = 41.0  # груба оцінка для порівняння бюджету в $
+
 # Джерело 3 — загальний потік фріланс-гіґів (переважно Upwork-оголошення),
 # без категорій, тому фільтр релевантності тут виключно за ключовими
 # словами в тексті поста (на відміну від Freelancehunt, де це категорія).
@@ -315,7 +373,13 @@ PUSH_MESSAGE_TEXT = "Щоденну перевірку завершено, мо�
 # --------------------------------------------------------------------------
 # Крок 2 — пошта
 # --------------------------------------------------------------------------
-GMAIL_SEARCH_WINDOW_DAYS = 30
+# 2 доби (було 30): оброблені треди й так отримують лейбл і виключаються з
+# пошуку, а 30-денне вікно щодня тягнуло десятки зайвих get_thread і впиралось
+# у квоту Gmail (10.10.2026). Якщо запуски пропускаються 3+ доби поспіль —
+# збільш тимчасово.
+GMAIL_SEARCH_WINDOW_DAYS = 2
+# Максимум тредів за один запуск (найновіші першими — так їх повертає Gmail).
+GMAIL_MAX_THREADS_PER_RUN = 50
 GMAIL_KEYWORDS = (
     "вакансія", "співбесіда", "candidate", "interview", "resume", "application",
 )
@@ -333,3 +397,27 @@ EMAIL_STATUS_OPTIONS = (
     "headhunting-пропозиція (кандидат не подавався)",
     "очікування без явної відповіді",
 )
+
+# Gmail: на 429 і 403 rateLimitExceeded — ОДНА пауза 60 с і один повтор
+# (квота "units per minute" скидається за хвилину; короткі 1/2/4/8 с не
+# допомагали). Плюс невелика пауза між threads.get.
+GMAIL_RATE_LIMIT_PAUSE_SEC = 60
+GMAIL_THREAD_PAUSE_SEC = 0.2
+
+# --------------------------------------------------------------------------
+# Вартість Claude (облік за usage кожної відповіді, claude_orchestrator/cost.py)
+# --------------------------------------------------------------------------
+# USD за 1 млн токенів: (вхід, вихід) за родиною моделі (підрядок назви
+# моделі). Це оцінка для бюджету — ПЕРЕВІР актуальні ціни на
+# https://www.anthropic.com/pricing. Невідома модель рахується за
+# найдорожчою родиною (консервативно).
+MODEL_PRICES_PER_MTOK = {
+    "haiku": (1.0, 5.0),
+    "sonnet": (3.0, 15.0),
+    "opus": (5.0, 25.0),
+}
+FALLBACK_PRICE_PER_MTOK = (5.0, 25.0)
+CACHE_WRITE_MULTIPLIER = 1.25  # запис у prompt cache (TTL 5 хв) = 1.25x ціни входу
+CACHE_READ_MULTIPLIER = 0.10   # читання з кешу = 0.1x ціни входу
+# Журнал вартості: один рядок на запуск, дописується (docs/COSTS.md).
+COSTS_CSV_PATH = "logs/costs.csv"

@@ -40,7 +40,7 @@ def _run(projects, evals, *, dedup=(None, "")):
         "telegram": SourceStatus(source="telegram", status="OK"),
     }
     with patch.object(step1_2, "_scrape_all", lambda: (projects, statuses)), \
-         patch.object(step1_2, "call_json", lambda prompt: {"evaluations": evals}), \
+         patch.object(step1_2, "call_json", lambda prompt, **kw: {"evaluations": evals}), \
          patch.object(step1_2, "_read_dedup_log_with_retry", lambda: dedup), \
          patch.object(step1_2, "_get_or_create_metrics_sheet", lambda: "sheet123"), \
          patch("google_services.sheets.ensure_header", lambda *a, **k: None), \
@@ -103,7 +103,7 @@ def test_known_url_skips_claude_call_entirely():
     )
     call_count = 0
 
-    def _counting_call_json(prompt):
+    def _counting_call_json(prompt, **kw):
         nonlocal call_count
         call_count += 1
         return {"evaluations": []}

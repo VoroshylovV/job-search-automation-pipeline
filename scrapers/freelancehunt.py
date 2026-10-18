@@ -46,6 +46,11 @@ PROJECT_LINK_RE = re.compile(r"^/projects/[\w\-]+/(\d+)\.html")
 # "12 ставок" / "12 откликов" — і укр, і рос локалізація трапляється залежно
 # від мовних налаштувань акаунту/сесії.
 BIDS_RE = re.compile(r"(\d+)\s*(?:ставок|ставк[аиу]|отклик[а-я]*)", re.I)
+# Бюджет у картці HTML-фолбеку («5 000 UAH», «200 $»), щоб Правило К працювало
+# і без API-токена (раніше budget_raw у фолбеку був порожній завжди).
+BUDGET_RE = re.compile(r"(\d[\d\s\u00a0]{0,9})\s*(UAH|грн|₴|USD|\$)", re.I)
+# Статус кожної категорії окремо (метрики фрілансу, колонки 6 і 7).
+LAST_CATEGORY_STATUS: dict[str, str] = {}
 
 
 def _parse_card(card, category: str) -> RawFreelanceProject | None:
@@ -63,9 +68,12 @@ def _parse_card(card, category: str) -> RawFreelanceProject | None:
     if bids_match:
         bids_count = int(bids_match.group(1))
 
-    # Бюджет часто не вказаний або "за домовленістю" — семантику "не
-    # вказано" визначає Claude в оцінці (Крок 1.2 навмисно НЕ фільтрує за
-    # бюджетом, конкуренція за кількістю ставок важливіша, див. config.py).
+    budget_raw = ""
+    bm = BUDGET_RE.search(full_text)
+    if bm:
+        amount = re.sub(r"[\s\u00a0]", "", bm.group(1))
+        currency = "USD" if bm.group(2).upper() in ("$", "USD") else "UAH"
+        budget_raw = f"{amount} {currency}"
     return RawFreelanceProject(
         source="freelancehunt.com",
         title=title,
@@ -73,7 +81,7 @@ def _parse_card(card, category: str) -> RawFreelanceProject | None:
         category=category,
         posted_raw="",  # немає окремого стабільного селектора дати — йде у snippet
         bids_count=bids_count,
-        budget_raw="",
+        budget_raw=budget_raw,
         description_snippet=full_text[:600],
     )
 
@@ -123,8 +131,10 @@ def _scrape_api(token: str) -> Iterator[RawFreelanceProject]:
             payload = resp.json()
         except (ScraperError, ValueError) as exc:
             last_error = exc
+            LAST_CATEGORY_STATUS[category] = "недоступна"
             continue
         any_success = True
+        LAST_CATEGORY_STATUS[category] = "OK"
         for item in payload.get("data", []) or []:
             project = _parse_api_item(item, category)
             if project is None or project.url in seen_urls:
@@ -138,6 +148,7 @@ def _scrape_api(token: str) -> Iterator[RawFreelanceProject]:
 def scrape() -> Iterator[RawFreelanceProject]:
     """API, якщо є токен; якщо API впало повністю (невалідний токен -> 401,
     мережа) — фолбек на HTML-скрапінг, щоб джерело не губилось через токен."""
+    LAST_CATEGORY_STATUS.clear()
     if FREELANCEHUNT_API_TOKEN:
         try:
             projects = list(_scrape_api(FREELANCEHUNT_API_TOKEN))
@@ -160,8 +171,10 @@ def _scrape_html() -> Iterator[RawFreelanceProject]:
             resp = fetch(session, listing_url)
         except ScraperError as exc:
             last_error = exc
+            LAST_CATEGORY_STATUS[category] = "недоступна"
             continue
         any_success = True
+        LAST_CATEGORY_STATUS[category] = "OK"
         soup = BeautifulSoup(resp.text, "html.parser")
         for link in soup.find_all("a", href=PROJECT_LINK_RE):
             card = link.find_parent(["li", "div", "article"]) or link.parent

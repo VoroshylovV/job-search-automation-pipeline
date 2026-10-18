@@ -64,20 +64,3 @@ def replace_full_text(document_id: str, new_text: str) -> None:
             documentId=document_id, body={"requests": requests_batch}
         ).execute()
 
-
-def append_text(document_id: str, text_to_append: str) -> None:
-    """Справжнє дописування в кінець документа (реальний append, не rebuild)."""
-    guard_not_forbidden(document_id)
-    service = docs_service()
-    end_index = _end_index(service, document_id)
-    # insertText з index = end_index - 1 (перед фінальним символом кінця
-    # секції) — стандартний трюк Docs API для "додати в кінець".
-    insert_index = max(1, end_index - 1)
-    service.documents().batchUpdate(
-        documentId=document_id,
-        body={
-            "requests": [
-                {"insertText": {"location": {"index": insert_index}, "text": text_to_append}}
-            ]
-        },
-    ).execute()

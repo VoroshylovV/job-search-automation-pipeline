@@ -99,22 +99,27 @@ def read_values(spreadsheet_id: str, range_: str = "A1:ZZ") -> list[list[str]]:
     return result.get("values", [])
 
 
-def read_column_by_header(spreadsheet_id: str, column_header: str) -> list[str]:
-    """Знаходить колонку за назвою в рядку заголовків (рядок 1) і повертає
-    всі непорожні значення під нею. Використовується для Рівня 2 дедуп-страховки
-    (звірка по колонці "Посилання на вакансію" таблиці відгуків) — читання
-    без прив'язки до фіксованого номера колонки, бо Володимир іноді
-    редагує/перевпорядковує цю таблицю вручну."""
+
+
+def read_rows_by_headers(spreadsheet_id: str, column_headers: list[str]) -> list[dict[str, str]]:
+    """Рядки даних як {заголовок: значення} для вказаних колонок. Колонки,
+    яких немає в таблиці, дають порожні значення; якщо немає жодної —
+    повертає []. Порожні рядки (усі значення порожні) пропускаються."""
     rows = read_values(spreadsheet_id)
-    located = find_header_row(rows, column_header)
-    if located is None:
+    located = {h: find_header_row(rows, h) for h in column_headers}
+    found = [v for v in located.values() if v is not None]
+    if not found:
         return []
-    header_row_idx, idx = located
-    values: list[str] = []
+    header_row_idx = max(r for r, _ in found)
+    out: list[dict[str, str]] = []
     for row in rows[header_row_idx + 1:]:
-        if idx < len(row) and row[idx].strip():
-            values.append(row[idx].strip())
-    return values
+        rec = {
+            h: (row[loc[1]].strip() if loc and loc[1] < len(row) else "")
+            for h, loc in located.items()
+        }
+        if any(rec.values()):
+            out.append(rec)
+    return out
 
 
 HEADER_SEARCH_ROWS = 5

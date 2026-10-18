@@ -23,6 +23,8 @@ from config import (
     MAX_ENGLISH_LEVEL,
     MAX_EXPERIENCE_YEARS,
     MIN_SALARY_UAH,
+    MIN_SALARY_USD_APPROX,
+    NEAR_MISS_MIN_SALARY_UAH,
 )
 from models import RawFreelanceProject, RawJobPosting
 
@@ -39,18 +41,35 @@ VACANCY_EVAL_SYSTEM_PROMPT = f"""Ти оцінюєш вакансії Data Analy
 
 Критерії, яким вакансія має відповідати (passes_criteria = true лише якщо \
 відповідає ВСІМ):
-- Роль: Data Analyst або Product Analyst, рівень Junior АБО без вказаного \
-рівня, АБО вимога досвіду до {MAX_EXPERIENCE_YEARS} років включно (0-1 рік, \
-"без досвіду", "від 1 року", "1.5 роки" тощо). НЕ орієнтуйся на слово "Junior" \
-у назві — дивись на фактичну вимогу до досвіду. Відхиляй вакансії з вимогою \
-2+ роки або рівнем Middle/Senior.
+- Роль: Data Analyst або Product Analyst; також AI Data Analyst, LLM/AI \
+quality analyst, data analyst у сферу AI, prompt/evaluation analyst, AI \
+Operations Analyst, CRM-аналітик, Operations/Systems/Business Data Analyst \
+із SQL у вимогах (Analytics Engineer — поза профілем, "роль"). Рівень Junior \
+АБО без вказаного рівня, АБО вимога досвіду до {MAX_EXPERIENCE_YEARS} років \
+включно (0-1 рік, "без досвіду", "від 1 року", "1.5 роки" тощо). НЕ \
+орієнтуйся на слово "Junior" у назві — дивись на фактичну вимогу до досвіду. \
+Відхиляй вакансії з вимогою 2+ роки або рівнем Middle/Senior. ВИНЯТОК: \
+"Junior or middle", "Junior/Middle", "Strong Junior" — нижня межа Junior, НЕ \
+відхиляй за рівнем, але match_level не вище Medium.
   Примітка щодо Djinni/DOU: там немає фільтра "до 1 року" — лише "без \
 досвіду" і "1 рік досвіду". Формулювання "від 1 року"/"1.5 роки" на цих \
 майданчиках зазвичай потрапляють у категорію "1 рік досвіду" — не відхиляй \
 їх через це.
 - Формат: віддалено/remote (Україна або worldwide).
-- ЗП: від {MIN_SALARY_UAH} грн (або еквівалент у $) АБО не вказана.
-- Англійська: до {MAX_ENGLISH_LEVEL} включно у вимогах (відхиляй C1+).
+- ЗП: від {MIN_SALARY_UAH} грн (або еквівалент у $, ≈ ${MIN_SALARY_USD_APPROX}) АБО не вказана.
+- Англійська: до {MAX_ENGLISH_LEVEL} включно у вимогах (відхиляй C1+). Вимога \
+"B2+"/"Upper-Intermediate+" НЕ відхиляє — додай у flags "англ. B2+".
+- Вимога вищої математичної/технічної освіти НЕ відхиляє — додай у flags \
+"вимога: мат. освіта".
+
+Майже підійшли (near_miss): якщо вакансія відхилена (passes_criteria=false) \
+РІВНО за одним м'яким критерієм, а за всіма іншими проходить, постав \
+near_miss=true і near_miss_reason — яка саме умова не виконана. М'які \
+критерії: ЗП від {NEAR_MISS_MIN_SALARY_UAH} до {MIN_SALARY_UAH} грн; досвід з \
+нижньою межею понад {MAX_EXPERIENCE_YEARS} і не більше 2 років; англійська C1+. \
+Жорсткі критерії (офіс/гібрид без remote, рівень Senior/Middle/Lead без \
+Junior, роль поза профілем, військова служба) — near_miss=false. Якщо \
+відхилено за двома й більше критеріями — near_miss=false.
 
 Верхня межа досвіду й Match-рівень: якщо для вакансії з діапазоном досвіду \
 нижня межа не перевищує {MAX_EXPERIENCE_YEARS} років, а ВЕРХНЯ межа \
@@ -62,21 +81,35 @@ true), але match_level для неї НЕ МОЖЕ бути вище Medium, 
 межа вже перевищує {MAX_EXPERIENCE_YEARS}. А "до 2 років" (0-2 роки) — НЕ \
 відхиляється (нижня межа 0), але капається на Medium через верхню межу.
 
-Для кожної вакансії, що пройшла критерії, визнач Match-рівень навичок \
-(з урахуванням капа вище, якщо застосовний):
-- High: у вимогах/перевагах прямо згадано 3+ реальних навички кандидата, \
-без інших істотних розбіжностей, і верхня межа досвіду (якщо є діапазон) \
-не перевищує {MAX_EXPERIENCE_YEARS} років.
-- Medium: збігається 1-2 навички, або є нахил у бік "не навичок" \
-кандидата (але базові SQL/Excel все ще застосовні), або вакансія \
-відповідає критеріям High за навичками, але верхня межа досвіду \
-перевищує {MAX_EXPERIENCE_YEARS} років (капнуто, див. вище).
-- Low: збігається 0-1 навичка, або вимоги переважно поза профілем, або \
-опису замало для оцінки.
+Для кожної вакансії, що пройшла критерії, визнач три компоненти Match-рівня, \
+кожен 0-2 бали (поверни їх у match_scores; підсумковий рівень рахує код, а \
+match_level став за тією ж формулою):
+- A) Скіли (вимоги/навички): 2 = 3+ реальних навичок кандидата, серед них SQL \
+або Python; 1 = 1-2 навички; 0 = жодної або лише з "НЕ навичок" \
+(Power BI/Looker Studio/R/GA4).
+- B) Обов'язки (що робитимеш): 2 = понад половину ключових обов'язків у \
+профілі кандидата; 1 = частково; 0 = переважно поза профілем (розробка/ETL, \
+тестування ПЗ, веб-аналітика тегів, продажі, адміністрування).
+- C) Очікування роботодавця (рівень/досвід/мова/must-have): 2 = досвід \
+<= {MAX_EXPERIENCE_YEARS} року або не вказано, англійська <= {MAX_ENGLISH_LEVEL} або не \
+вказана, немає must-have поза профілем; 1 = досвід > {MAX_EXPERIENCE_YEARS} року АБО 1 \
+must-have поза профілем; 0 = 2+ must-have поза профілем або вимоги суттєво \
+вищі за Junior.
+Підсумок (сума A+B+C): High = 5-6 і A>0, B>0; Medium = 3-4; Low = 0-2 АБО \
+A=0 АБО B=0. Кап вище (верхня межа досвіду > {MAX_EXPERIENCE_YEARS} року -> \
+максимум Medium) лишається чинним незалежно від суми. Якщо повної сторінки \
+немає (full_text_available=false) — не вище Medium.
 
 Ветеранські бонуси: постав veteran_bonus=true, якщо вакансія згадує \
 ветеранські програми, бронювання від мобілізації, або явно цінує \
 military/ветеранський бекграунд.
+
+Військова служба: вакансії у військових частинах/формуваннях (ЗСУ, \
+Національна гвардія/НГУ, ДПСУ, інші силові структури) та вакансії, що самі \
+по собі передбачають військову службу або військовий контракт — passes_criteria=\
+false, reject_code "військова служба", НЕ показуй навіть із low_match_location. \
+low_match_location=true — лише для цивільних вакансій із формальним \
+обмеженням "тільки для тих, хто фізично перебуває в Україні".
 
 Локація: кандидат фізично НЕ в Україні. Якщо вакансія формально "remote по \
 Україні", але текст прямо вимагає фізичної присутності в Україні — \
@@ -90,6 +123,17 @@ ISO-дату (сьогоднішня дата вказана в самому к�
 date_undetermined=false. Якщо вказівки немає взагалі — posted_date=null, \
 date_undetermined=true (це не означає відхилення — просто позначка).
 
+match_reasoning — у форматі «Скіли: <...> / Обов'язки: <...> / Очікування: \
+<...>» (по кілька слів на компонент).
+
+Лаконічність: reject_reason, match_reasoning і low_match_location_reason — \
+НЕ довше 200 символів кожне (відповідь на десятки вакансій інакше \
+обрізається).
+
+Брак окремого інструмента (наприклад, Power BI при наявному Tableau) знижує \
+компонент A і Match-рівень, але НЕ є причиною відсіву: passes_criteria \
+лишається true.
+
 Поверни СТРОГО валідний JSON (без markdown-обгортки, без пояснень поза JSON) \
 за схемою:
 {{
@@ -99,18 +143,22 @@ date_undetermined=true (це не означає відхилення — про
       "passes_criteria": <bool>,
       "reject_reason": <string або null>,
       "reject_code": <null якщо passes_criteria=true, інакше ОДИН з: \
-"роль"|"досвід"|"формат"|"ЗП"|"англійська"|"інше" — перший критерій, \
+"роль"|"досвід"|"формат"|"ЗП"|"англійська"|"військова служба"|"інше" — перший критерій, \
 на якому вакансію відхилено>,
       "normalized_title": <string>,
       "normalized_company": <string, БЕЗ "CV"/"Resume"/"Junior"/назви ролі — \
 лише власна назва компанії>,
       "match_level": <"High"|"Medium"|"Low"|null>,
+      "match_scores": <{{"skills": 0-2, "duties": 0-2, "expectations": 0-2}} або null>,
       "match_reasoning": <string на 1-2 речення, або null>,
       "veteran_bonus": <bool>,
       "low_match_location": <bool>,
       "low_match_location_reason": <string або null>,
       "posted_date": <"YYYY-MM-DD" або null>,
-      "date_undetermined": <bool>
+      "date_undetermined": <bool>,
+      "flags": <масив рядків із ["англ. B2+", "вимога: мат. освіта"], може бути []>,
+      "near_miss": <bool>,
+      "near_miss_reason": <string або null>
     }}
   ]
 }}
@@ -126,8 +174,9 @@ date_undetermined=true (це не означає відхилення — про
 VACANCY_STAGE_CARD = """ЕТАП 1 з 2 — картка зі списку видачі. Тобі дано лише коротку картку \
 (description_snippet), а не повний текст вакансії. Відсіюй (passes_criteria=false) \
 ЛИШЕ коли картка ЯВНО суперечить критерію: прямо названо офіс/гібрид без \
-варіанту remote, досвід 2+ роки, рівень Middle/Senior/Lead/Head, роль не \
-аналітика даних/продукту, англійська C1+, ЗП нижче порогу. Якщо інформації \
+варіанту remote, досвід 2+ роки, рівень Middle/Senior/Lead/Head (крім \
+"Junior/Middle", "Strong Junior"), роль зовсім не аналітична (BA/Ops/CRM/AI-\
+аналітику НЕ відсівай на цьому етапі), англійська C1+, ЗП нижче порогу. Якщо інформації \
 бракує — passes_criteria=true: вакансію буде перевірено на етапі 2 за \
 повним текстом. match_level на цьому етапі попередній."""
 
@@ -139,23 +188,36 @@ VACANCY_STAGE_FULL = """ЕТАП 2 з 2 — ВИРІШАЛЬНИЙ. description_
 віддалено» як вибір працівника). Лише офіс, гібрид з обов'язковими днями в \
 офісі, релокація — reject_code "формат". Формат не згадано взагалі — теж \
 reject_code "формат", reject_reason "формат не підтверджено". Сама лише назва \
-міста (наприклад «Київ») НЕ є підтвердженням remote.
+міста (наприклад «Київ») НЕ є підтвердженням remote. Якщо в полі зайнятості \
+(кластери/вид зайнятості) є «Удаленная работа» / «Віддалена робота» — це \
+підтверджений remote.
 - Досвід: якщо вимога не вказана взагалі — це допустимо (критерій «без \
 вказаного рівня»). Якщо вказана — застосовуй правила досвіду вище. Рівень \
 Middle/Senior/Lead/Head/Principal у назві або тексті — reject_code "досвід".
-- Роль: аналітика даних/продукту як основна робота. Аналітик-керівник, \
-менеджер, розробник, бізнес-/системний аналітик без роботи з даними — "роль".
+- Роль: аналітика даних/продукту як основна робота, а також AI-аналітика і \
+CRM-аналітик (див. «Роль» вище). Аналітик-керівник, менеджер, розробник, \
+Analytics Engineer або позиція без жодної аналітики даних — "роль". \
+Бізнес-аналітик (BA), операційна (Ops) і системна аналітика: у профілі, лише \
+якщо SQL прямо є у вимогах; тоді Match-рівень — за загальною формулою A+B+C \
+(без примусового Low). Без SQL у вимогах — відсів, reject_code "роль".
 - Дата публікації: шукай у тексті (поле дати, «N днів тому», дата в описі).
+- Повторна звірка ПЕРЕД рішенням: ЗП (поріг із критеріїв вище або не вказана) і дата публікації, знайдені саме на повній сторінці, ще раз звір з \
+критеріями (дата — «сьогодні/вчора» за місцевим часом кандидата). Дані повної \
+сторінки завжди переважають дані картки зі списку видачі.
 Не вигадуй відсутніх фактів: чого немає в тексті — того немає."""
 
 
-def build_vacancy_eval_prompt(
+def build_vacancy_eval_parts(
     raw_jobs: list[RawJobPosting],
     today: date | None = None,
     stage: str = "card",
     full_texts: dict[int, str] | None = None,
-) -> str:
-    """stage="card" — етап 1 (картка), stage="full" — етап 2 (повний текст).
+) -> tuple[str, str]:
+    """(статична частина, динамічна частина) промпту. Статична — профіль
+    кандидата + правила + блок етапу — однакова для всіх батчів етапу, тож
+    йде в prompt caching (client.call_json(cache_prefix=...)). Динамічна —
+    дата й вакансії батча. static + dynamic == build_vacancy_eval_prompt().
+    stage="card" — етап 1 (картка), stage="full" — етап 2 (повний текст).
     full_texts: {індекс у raw_jobs: повний текст} для етапу 2; для вакансій
     без повного тексту передається картка з full_text_available=false."""
     today = today or date.today()
@@ -179,9 +241,22 @@ def build_vacancy_eval_prompt(
     # build_email_classify_prompt) — без плейсхолдера всередині константи
     # VACANCY_EVAL_SYSTEM_PROMPT, щоб не тримати f-string-екранування
     # ({{ }}) і .replace() як дві паралельні механіки для того самого.
-    return VACANCY_EVAL_SYSTEM_PROMPT + "\n\n" + stage_block + "\n\nСьогоднішня дата: " + today.isoformat() + "\n\nВакансії:\n" + json.dumps(
+    static = VACANCY_EVAL_SYSTEM_PROMPT + "\n\n" + stage_block + "\n\n"
+    dynamic = "Сьогоднішня дата: " + today.isoformat() + "\n\nВакансії:\n" + json.dumps(
         payload, ensure_ascii=False, indent=2
     )
+    return static, dynamic
+
+
+def build_vacancy_eval_prompt(
+    raw_jobs: list[RawJobPosting],
+    today: date | None = None,
+    stage: str = "card",
+    full_texts: dict[int, str] | None = None,
+) -> str:
+    """Той самий промпт одним рядком (без розбиття для кешу)."""
+    static, dynamic = build_vacancy_eval_parts(raw_jobs, today, stage, full_texts)
+    return static + dynamic
 
 
 EMAIL_CLASSIFY_SYSTEM_PROMPT = f"""Ти класифікуєш листи Gmail, знайдені за \
@@ -285,3 +360,11 @@ def build_email_classify_prompt(raw_emails: list[dict]) -> str:
     return EMAIL_CLASSIFY_SYSTEM_PROMPT + "\n\nЛисти:\n" + json.dumps(
         payload, ensure_ascii=False, indent=2
     )
+
+
+def build_email_classify_parts(raw_emails: list[dict]) -> tuple[str, str]:
+    """(статична частина, динамічна) — для prompt caching; разом дають
+    build_email_classify_prompt()."""
+    full = build_email_classify_prompt(raw_emails)
+    static = EMAIL_CLASSIFY_SYSTEM_PROMPT + "\n\n"
+    return static, full[len(static):]

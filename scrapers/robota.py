@@ -25,9 +25,11 @@ from typing import Iterator
 from bs4 import BeautifulSoup
 
 from models import RawJobPosting
-from scrapers.base import ScraperError, fetch, get_session
+from config import DATE_WINDOW_DAYS, MAX_LISTING_PAGES
+from scrapers.base import Coverage, ScraperError, fetch, get_session, paginate
 
 COLLECTION_METHOD = "перша_сторінка"  # див. коментар у scrapers/djinni.py
+LAST_COVERAGE: list[Coverage] = []
 
 BASE_URL = "https://robota.ua"
 LISTING_URLS = [
@@ -37,7 +39,7 @@ LISTING_URLS = [
 
 # Публічне API пошуку вакансій, з якого бере дані сам сайт.
 ROBOTA_API_URL = "https://api.robota.ua/vacancy/search"
-API_KEYWORDS = ["data analyst", "product analyst"]
+API_KEYWORDS = ["data analyst", "product analyst", "ai analyst", "crm analyst"]  # AI/CRM — Правило И п.3
 # scheduleId=3 — "Віддалена робота" (додано 02.10.2026; перевірено: для
 # "data analyst" звужує видачу API зі 127 до 35). robota.ua позначає так і
 # гібрид "з можливістю віддаленої", тому остаточне рішення про формат
@@ -90,6 +92,16 @@ def _parse_html_cards(soup: BeautifulSoup) -> Iterator[RawJobPosting]:
         )
 
 
+def human_url(notebook_id, vacancy_id) -> str:
+    """Людське посилання `https://robota.ua/company<notebookId>/vacancy<id>`.
+    Саме його виводимо користувачу, пишемо в логи й таблицю відгуків; сире
+    посилання API (api.robota.ua/vacancy?id=…) використовується лише для
+    читання тексту (scrapers/detail.py) і ніколи не стає RawJobPosting.url."""
+    if notebook_id:
+        return f"{BASE_URL}/company{notebook_id}/vacancy{vacancy_id}"
+    return f"{BASE_URL}/vacancy{vacancy_id}"
+
+
 def _api_doc_to_job(doc: dict) -> RawJobPosting | None:
     """Один документ відповіді API: {id, name, companyName, notebookId,
     date, cityName, salary, shortDescription, ...}."""
@@ -97,12 +109,7 @@ def _api_doc_to_job(doc: dict) -> RawJobPosting | None:
     title = str(doc.get("name") or "").strip()
     if not vacancy_id or not title:
         return None
-    notebook_id = doc.get("notebookId")
-    url = (
-        f"{BASE_URL}/company{notebook_id}/vacancy{vacancy_id}"
-        if notebook_id
-        else f"{BASE_URL}/vacancy{vacancy_id}"
-    )
+    url = human_url(doc.get("notebookId"), vacancy_id)
     salary = doc.get("salary")
     salary_raw = str(salary) if salary not in (None, 0, "0", "") else ""
     city = str(doc.get("cityName") or "")
@@ -119,22 +126,34 @@ def _api_doc_to_job(doc: dict) -> RawJobPosting | None:
     )
 
 
+def _api_page(session, kw: str, n: int) -> list[RawJobPosting]:
+    """Сторінка n (з 1) пошуку API; у самого API сторінки рахуються з 0."""
+    try:
+        payload = fetch(session, ROBOTA_API_URL,
+                        params={"keyWords": kw, "scheduleId": API_REMOTE_SCHEDULE_ID, "page": n - 1}).json()
+    except ValueError as exc:
+        raise ScraperError(f"robota.ua API: не JSON ({exc})") from exc
+    docs = payload.get("documents") or payload.get("vacancies") or [] if isinstance(payload, dict) else []
+    return [j for j in (_api_doc_to_job(d) for d in docs if isinstance(d, dict)) if j is not None]
+
+
 def _scrape_api(session) -> list[RawJobPosting]:
     jobs: list[RawJobPosting] = []
     seen: set[str] = set()
     ok = False
     last_error: Exception | None = None
+    LAST_COVERAGE.clear()
     for kw in API_KEYWORDS:
         try:
-            payload = fetch(session, ROBOTA_API_URL, params={"keyWords": kw, "scheduleId": API_REMOTE_SCHEDULE_ID}).json()
-        except (ScraperError, ValueError) as exc:
+            page_jobs, cov = paginate(lambda n, k=kw: _api_page(session, k, n), f"api:{kw}",
+                                      max_pages=MAX_LISTING_PAGES, window_days=DATE_WINDOW_DAYS)
+        except ScraperError as exc:
             last_error = exc
             continue
         ok = True
-        docs = payload.get("documents") or payload.get("vacancies") or [] if isinstance(payload, dict) else []
-        for doc in docs:
-            job = _api_doc_to_job(doc) if isinstance(doc, dict) else None
-            if job is None or job.url in seen:
+        LAST_COVERAGE.append(cov)
+        for job in page_jobs:
+            if job.url in seen:
                 continue
             seen.add(job.url)
             jobs.append(job)
