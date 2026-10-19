@@ -90,8 +90,9 @@ def test_budget_limit_stops_calls_and_marks_rest_without_crash(monkeypatch):
     budget = [d for d in res["decisions"] if d["result"] == step1.EVAL_BUDGET_RESULT]
     assert len(budget) == 15 and res["budget_unevaluated_count"] == 15
     assert all(d["code"] == "ліміт_бюджету" for d in budget)
-    # 15 оцінених на етапі 1 → етап 2 бере 10 (ліміт), ще 5 — «ліміт етапу 2»
-    assert len(res["vacancies"]) == 10 and res["stage2_capped_count"] == 5
+    # 15 оцінених на етапі 1 → етап 2 бере min(15, ліміт); решта — «ліміт етапу 2»
+    from config import MAX_FULLTEXT_VACANCIES as _L
+    assert len(res["vacancies"]) == min(15, _L) and res["stage2_capped_count"] == max(0, 15 - _L)
 
 
 def test_budget_exhausted_before_start_marks_everything_and_does_not_raise(monkeypatch):
