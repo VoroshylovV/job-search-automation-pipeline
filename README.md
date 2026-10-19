@@ -15,14 +15,48 @@ scheduled-задачі. Той самий "мозок" (Claude оцінює ва
 
 ## Приклад реального запуску
 
-<img src="docs/img/vacancies_found_vs_shown.png" alt="Знайдено vs показано по днях" width="520">
+import matplotlib; matplotlib.use("Agg")
+import matplotlib.pyplot as plt, matplotlib.animation as anim, datetime as dt
+S="#fcfcfb"; T1="#0b0b0b"; T2="#52514e"; GR="#e4e3df"; B="#2a78d6"; O="#eb6834"
+plt.rcParams.update({"font.family":"DejaVu Sans","font.size":10,"axes.edgecolor":GR,"axes.labelcolor":T2,"xtick.color":T2,"ytick.color":T2})
+d=["09-25","09-26","09-27","09-28","09-29","09-30","10-01","10-02","10-03","10-04","10-05","10-06","10-07","10-08","10-09","10-10","10-11","10-12","10-13","10-14","10-15","10-16","10-17","10-18","10-19"]
+found=[116,117,117,118,119,118,119,121,119,118,116,119,120,122,122,123,123,123,127,129,129,130,129,129,215]
+shown=[14,1,8,6,10,16,8,7,0,0,1,0,0,0,0,0,0,2,0,0,0,0,0,0,1]
+x=[dt.date(2026,int(s[:2]),int(s[3:])) for s in d]
+fig,(a1,a2)=plt.subplots(2,1,figsize=(9,5.6),sharex=True,gridspec_kw={"height_ratios":[1,1]},facecolor=S)
+for a in (a1,a2):
+    a.set_facecolor(S); a.grid(axis="y",color=GR,lw=0.8); a.set_axisbelow(True)
+    for s in ("top","right"): a.spines[s].set_visible(False)
+a1.plot(x,found,color=B,lw=2,marker="o",ms=4)
+a1.set_title("Знайдено до фільтрів (5 джерел)",loc="left",color=T1,fontsize=11)
+a1.annotate("19.10: усі сторінки видачі\n129 → 215",xy=(x[-1],215),xytext=(x[-8],190),color=T2,fontsize=9,arrowprops=dict(arrowstyle="-",color=T2,lw=0.8))
+a1.set_ylim(0,240)
+a2.bar(x,shown,color=O,width=0.7)
+a2.set_title("Показано (пройшли всі фільтри)",loc="left",color=T1,fontsize=11)
+a2.axvline(dt.date(2026,10,2)+dt.timedelta(hours=12),color=T2,ls="--",lw=0.8)
+a2.text(dt.date(2026,10,3),13,"02.10: оцінка за повним текстом,\nстоп за рівнем у назві",color=T2,fontsize=9,va="top")
+a2.text(x[0],15.5,"77 за 8 днів",color=T2,fontsize=9,va="bottom")
+a2.text(dt.date(2026,10,12),5,"4 за 17 днів",color=T2,fontsize=9)
+a2.set_ylim(0,18)
+import matplotlib.dates as md
+a2.xaxis.set_major_formatter(md.DateFormatter("%d.%m")); a2.xaxis.set_major_locator(md.DayLocator(interval=3))
+fig.tight_layout(); fig.savefig("month_found_vs_shown.png",dpi=150,facecolor=S)
 
-8 днів поспіль реальних даних (17–24.09.2026): конверсія показано/знайдено,
-інцидент з падінням доступності джерел і відновлення наступного дня, чесний
-0-результат Кроку 1.2 з власним сигналом системи "дні поспіль без
-результату". Повний розбір, другий графік і важливе уточнення про джерело
-цих даних — **[docs/sample-run.md](docs/sample-run.md)**.
-
+# funnel gif
+st=[("Знайдено",215),("Після дедуплікації за ID",189),("У вікні дат (картка)",48),("Після стопу за рівнем у назві",37),("Пройшли картку (етап 1)",17),("Оцінено за повним текстом (етап 2)",10),("Показано",1)]
+note=["","−13 дублі, −13 уже подано","−141 старші за вчора","−11 Senior/Lead/… у назві","−20 Low або не та роль","7 не оцінено: ліміт 10","+3 «майже» (досвід 2 роки)"]
+fig,ax=plt.subplots(figsize=(10,4.4),facecolor=S)
+def draw(k):
+    ax.clear(); ax.set_facecolor(S); ax.set_xlim(-200,330); ax.set_ylim(-0.6,len(st)-0.4); ax.invert_yaxis(); ax.axis("off")
+    ax.set_title("Один запуск, 19.10.2026: від 215 вакансій до 1",loc="left",color=T1,fontsize=12)
+    for i,(lab,v) in enumerate(st[:k]):
+        ax.barh(i,v,color=O if i==len(st)-1 else B,height=0.62)
+        ax.text(-6,i,lab,va="center",ha="right",color=T1,fontsize=9.5)
+        ax.text(v+4,i,f"{v}"+(f"   {note[i]}" if note[i] else ""),va="center",color=T2,fontsize=9)
+frames=list(range(1,len(st)+1))+[len(st)]*6
+a=anim.FuncAnimation(fig,draw,frames=frames,interval=700)
+a.save("funnel_2026-10-19.gif",writer=anim.PillowWriter(fps=1.4),savefig_kwargs={"facecolor":S})
+draw(len(st)); fig.savefig("funnel_2026-10-19.png",dpi=130,facecolor=S)
 ## Архітектура
 
 Кожен крок запускається незалежно й має власний `try/except`: збій одного кроку не зупиняє інші.
