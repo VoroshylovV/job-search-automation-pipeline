@@ -29,7 +29,7 @@ CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "claude-sonnet-5-5")
 CLAUDE_MODEL_CARDS = os.environ.get("CLAUDE_MODEL_CARDS", CLAUDE_MODEL)
 CLAUDE_MODEL_FULLTEXT = os.environ.get("CLAUDE_MODEL_FULLTEXT", CLAUDE_MODEL)
 # Етап 2 (повний текст, дорогий): не більше стільки вакансій, лише High/Medium з етапу 1.
-MAX_FULLTEXT_VACANCIES = 10
+MAX_FULLTEXT_VACANCIES = 20
 # Ліміт вартості Claude за запуск (USD). Крок 1 перестає викликати API, коли
 # вартість сягає MAX_RUN_COST_USD - BUDGET_RESERVE_LATER_STEPS_USD (резерв для
 # Кроків 1.2 і 2, що йдуть далі); решта вакансій — «не оцінено (ліміт бюджету)».
