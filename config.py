@@ -22,16 +22,23 @@ load_dotenv()  # читає .env у робочій директорії, якщ�
 # (OAuth client secret, завантажений з Google Cloud Console).
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "claude-sonnet-5-5")
-# Дешева модель для етапу 1 (оцінка карток) і сильніша для етапу 2 (повний
-# текст) та Кроку 2 (пошта). Бюджет API: $8.83 до 05.11.2026 (~$0.30/запуск).
-CLAUDE_MODEL_CARDS = os.environ.get("CLAUDE_MODEL_CARDS", "claude-haiku-4-5-20251001")
+# Модель для етапу 1 (оцінка карток). Тиждень C (19–25.10.2026): Sonnet 5.5 на
+# всіх етапах, як і в онлайн-версії, щоб виміряти ефект Haiku на етапі 1 (B→C,
+# docs/analysis/rejection-log/02_changes.md). Повернути Haiku:
+# CLAUDE_MODEL_CARDS=claude-haiku-4-5-20251001 у .env.
+CLAUDE_MODEL_CARDS = os.environ.get("CLAUDE_MODEL_CARDS", CLAUDE_MODEL)
 CLAUDE_MODEL_FULLTEXT = os.environ.get("CLAUDE_MODEL_FULLTEXT", CLAUDE_MODEL)
 # Етап 2 (повний текст, дорогий): не більше стільки вакансій, лише High/Medium з етапу 1.
-MAX_FULLTEXT_VACANCIES = 10
+MAX_FULLTEXT_VACANCIES = 20
 # Ліміт вартості Claude за запуск (USD). Крок 1 перестає викликати API, коли
 # вартість сягає MAX_RUN_COST_USD - BUDGET_RESERVE_LATER_STEPS_USD (резерв для
 # Кроків 1.2 і 2, що йдуть далі); решта вакансій — «не оцінено (ліміт бюджету)».
-MAX_RUN_COST_USD = float(os.environ.get("MAX_RUN_COST_USD", "0.30"))
+# 1.00 (18.10.2026): тестовий прогін на Sonnet 5.5 з лімітом 0.60 зупинився на
+# $0.655 — 5 батчів карток по 20 (≈ $0.13 кожен, переважно вихідні токени),
+# 49 з 149 вакансій не оцінено, етап 2 не запустився. Разом зі стислим
+# виводом етапу 1 (prompts.VACANCY_STAGE_CARD) очікувано ≈ $0.8–0.9 за запуск.
+# Історія: 0.30 (Haiku на етапі 1) → 0.60 (план тижня C) → 1.00.
+MAX_RUN_COST_USD = float(os.environ.get("MAX_RUN_COST_USD", "1.00"))
 BUDGET_RESERVE_LATER_STEPS_USD = 0.05
 
 GOOGLE_CREDENTIALS_PATH = os.environ.get(

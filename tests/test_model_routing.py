@@ -24,9 +24,10 @@ def _fresh_tracker():
     cost.tracker.reset()
 
 
-def test_config_defaults_haiku_for_cards_and_main_model_for_fulltext():
+def test_config_defaults_main_model_for_cards_and_fulltext():
+    # Тиждень C (19–25.10.2026): без змінних у .env усі етапи — CLAUDE_MODEL.
     import config
-    assert "haiku" in config.CLAUDE_MODEL_CARDS
+    assert config.CLAUDE_MODEL_CARDS == config.CLAUDE_MODEL
     assert config.CLAUDE_MODEL_FULLTEXT == config.CLAUDE_MODEL
 
 

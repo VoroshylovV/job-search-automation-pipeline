@@ -178,7 +178,17 @@ VACANCY_STAGE_CARD = """ЕТАП 1 з 2 — картка зі списку ви�
 "Junior/Middle", "Strong Junior"), роль зовсім не аналітична (BA/Ops/CRM/AI-\
 аналітику НЕ відсівай на цьому етапі), англійська C1+, ЗП нижче порогу. Якщо інформації \
 бракує — passes_criteria=true: вакансію буде перевірено на етапі 2 за \
-повним текстом. match_level на цьому етапі попередній."""
+повним текстом. match_level на цьому етапі попередній.
+
+СТИСЛИЙ ВИВІД НА ЕТАПІ 1 (має пріоритет над схемою JSON вище; критерії \
+не змінюються — лише обсяг відповіді, бо вирішальна оцінка все одно на етапі 2):
+- Завжди: raw_index, passes_criteria; posted_date — лише якщо дата видна в картці.
+- passes_criteria=false: reject_code, reject_reason (до 60 символів); якщо \
+near_miss=true — ще near_miss і near_miss_reason (до 60 символів). Інших полів \
+НЕ додавай.
+- passes_criteria=true: match_level і match_scores. Інших полів (match_reasoning, \
+normalized_*, flags, veteran_bonus, low_match_location тощо) НЕ додавай — їх \
+заповнить етап 2."""
 
 VACANCY_STAGE_FULL = """ЕТАП 2 з 2 — ВИРІШАЛЬНИЙ. description_snippet — повний текст вакансії \
 (якщо full_text_available=false — повний текст отримати не вдалося, і це лише \
