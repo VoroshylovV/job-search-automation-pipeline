@@ -69,24 +69,31 @@ def test_stage2_receives_only_high_and_medium(monkeypatch):
     assert len(res["vacancies"]) == 2
 
 
-def test_stage2_capped_at_10_best_first(monkeypatch):
-    res, titles = _run(["Medium"] * 8 + ["High"] * 4, monkeypatch)  # 12 кандидатів
-    assert len(titles) == 10
-    assert {f"Data Analyst {i}" for i in range(8, 12)} <= set(titles)  # усі High пройшли
+def test_stage2_capped_at_limit_best_first(monkeypatch):
+    import config
+    limit = config.MAX_FULLTEXT_VACANCIES
+    # (limit - 4) Medium + 4 High, плюс 2 зайві Medium понад ліміт
+    levels = ["Medium"] * (limit - 4 + 2) + ["High"] * 4
+    n = len(levels)
+    res, titles = _run(levels, monkeypatch)
+    assert len(titles) == limit
+    assert {f"Data Analyst {i}" for i in range(n - 4, n)} <= set(titles)  # усі High пройшли
     assert res["stage2_capped_count"] == 2
     capped = [d for d in res["decisions"] if d["result"] == step1.EVAL_STAGE2_CAP_RESULT]
     assert len(capped) == 2 and all(d["code"] == "ліміт_етапу_2" for d in capped)
-    assert len(res["vacancies"]) == 10 and len(res["decisions"]) == 12
+    assert len(res["vacancies"]) == limit and len(res["decisions"]) == n
 
 
-def test_stage2_exactly_10_is_not_capped(monkeypatch):
-    res, titles = _run(["Medium"] * 10, monkeypatch)
-    assert len(titles) == 10 and res["stage2_capped_count"] == 0
-
-
-def test_limit_value_is_10():
+def test_stage2_exactly_at_limit_is_not_capped(monkeypatch):
     import config
-    assert config.MAX_FULLTEXT_VACANCIES == 10
+    limit = config.MAX_FULLTEXT_VACANCIES
+    res, titles = _run(["Medium"] * limit, monkeypatch)
+    assert len(titles) == limit and res["stage2_capped_count"] == 0
+
+
+def test_limit_value_is_20():
+    import config
+    assert config.MAX_FULLTEXT_VACANCIES == 20  # піднято з 10 у коміті 2293b35 (19.10.2026)
 
 
 def test_selfcheck_reports_stage2_cap():
