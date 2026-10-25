@@ -49,6 +49,18 @@ def summary_row(utc_today: date, text: str) -> list[str]:
     return row
 
 
+def is_summary_row(row: list) -> bool:
+    """Рядок «ПІДСУМОК» (колонка «Результат»)."""
+    return len(row) > 5 and str(row[5]).strip() == SUMMARY_MARK
+
+
+def data_rows(values: list[list]) -> list[list]:
+    """Рядки даних логу відсіву БЕЗ заголовка й БЕЗ «ПІДСУМОК». Усі споживачі, що зводять лог
+    за URL, вартістю чи лічильниками (verify_writes, зовнішній аналіз docs/analysis), мають брати
+    рядки лише через цю функцію."""
+    return [r for r in values[1:] if not is_summary_row(r)]
+
+
 def drive_title(utc_today: date, n: int = 0) -> str:
     base = f"Лог відсіву {utc_today.isoformat()} ({REJECT_LOG_SYSTEM_LABEL})"
     return base if n == 0 else f"{base} (повтор {n})"

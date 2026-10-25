@@ -19,7 +19,15 @@ from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 from claude_orchestrator.cost import tracker as cost_tracker
-from config import CANDIDATE_LOCAL_TZ, CATEGORY_BLOCK_TITLE, CATEGORY_NONE, COMPARISON_SHEET_TITLE, EXIT_CODE_ALARM
+from config import (
+    CANDIDATE_LOCAL_TZ,
+    CATEGORY_BLOCK_TITLE,
+    CATEGORY_NONE,
+    COMPARISON_SHEET_TITLE,
+    EXIT_CODE_ALARM,
+    METRICS_KEY_COLUMNS,
+    METRICS_SHEET_TITLE,
+)
 from google_services import notify
 from pipeline import alarm, schedule_gate
 from pipeline.step1_2_freelance import run_step1_2
@@ -30,7 +38,13 @@ from pipeline.step2_mail import run_step2
 from pipeline.step3_metrics import run_step3
 from pipeline.step3_tracker import run_step3_tracker
 from pipeline.step4_selfcheck import format_selfcheck_block, mark_run_started, run_step4
-from pipeline.verify_writes import VERIFIED_OK_LINE, VerifyContext, verify_writes
+from pipeline.verify_writes import (
+    SIMULATE_KEYS,
+    VERIFIED_OK_LINE,
+    VerifyContext,
+    check_metrics_headers,
+    verify_writes,
+)
 from pipeline.step5_comparison import format_comparison_block, run_step5
 
 # Windows: при перенаправленні stdout у файл (Task Scheduler -> logs/scheduler.log)
@@ -235,10 +249,74 @@ def _reject_log_summary(step1_result: dict) -> str:
     return "; ".join(parts)
 
 
+USAGE_EXIT_CODE = 64  # неправильні прапорці
+SIMULATE_PUSH_TEXT = "СИМУЛЯЦІЯ тривоги (--simulate-fail): пайплайн не запускався, таблиці не чіпали."
+
+
+def _usage_error(message: str) -> int:
+    print(f"Помилка прапорців: {message}", file=sys.stderr)
+    return USAGE_EXIT_CODE
+
+
+def _simulate(key: str) -> int:
+    """Навчальна тривога: verify_writes() «падає» на вказаній перевірці; далі — той самий шлях,
+    що й у справжньої тривоги (перший рядок звіту/консолі, push urgent, код виходу 2). Пайплайн,
+    Drive, Claude і скрейпери не чіпаються."""
+    alarm.reset()
+    today = datetime.now(timezone.utc).date()
+    verify_writes(VerifyContext(utc_today=today, step1_result={}), simulate_fail=key)
+    block = alarm.format_block()
+    print(block + "\n\n" + SIMULATE_PUSH_TEXT)
+    sent = notify.send_push(notify.build_message(block, message=SIMULATE_PUSH_TEXT), urgent=True)
+    logger.info("Симуляція тривоги %r: push %s, код виходу %d", key, "надіслано" if sent else "НЕ надіслано", EXIT_CODE_ALARM)
+    return EXIT_CODE_ALARM
+
+
+def _check_metrics_headers() -> None:
+    """На початку запуску: реальні заголовки аркуша метрик у консоль + звірка з METRICS_KEY_COLUMNS.
+    Відсутня ключова колонка (або аркуш не прочитано) — одразу тривога."""
+    try:
+        header, missing = check_metrics_headers()
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Заголовки аркуша метрик не прочитано")
+        alarm.add(f"не вдалось прочитати заголовки аркуша «{METRICS_SHEET_TITLE}»: {type(exc).__name__}: {exc}")
+        print(alarm.format_block())
+        return
+    if header is None:
+        print(f"Аркуш «{METRICS_SHEET_TITLE}» ще не існує — буде створено.")
+        return
+    print(f"Заголовки аркуша «{METRICS_SHEET_TITLE}» ({len(header)}):")
+    for i, h in enumerate(header, 1):
+        print(f"  {i}. {h}")
+    if missing:
+        alarm.add(f"в аркуші «{METRICS_SHEET_TITLE}» відсутні ключові колонки: {'; '.join(missing)}")
+        print(alarm.format_block())
+    else:
+        print(f"Ключові колонки (METRICS_KEY_COLUMNS, {len(METRICS_KEY_COLUMNS)}): усі є в аркуші.")
+
+
 def main(argv: list[str] | None = None) -> int:
-    """Код виходу: 0 — штатно; EXIT_CODE_ALARM (2) — була тривога; 1 — аварія поза кроками."""
+    """Код виходу: 0 — штатно; EXIT_CODE_ALARM (2) — була тривога; 1 — аварія поза кроками;
+    64 — неправильні прапорці. Прапорці: --scheduled (запуск за розкладом Europe/Warsaw),
+    --scheduled --check-only (лише надрукувати рішення розкладу, код 0), --simulate-fail=<ключ>
+    (навчальна тривога; лише ручний запуск)."""
     argv = sys.argv[1:] if argv is None else argv
     scheduled = "--scheduled" in argv
+    check_only = "--check-only" in argv
+    sim_args = [a for a in argv if a == "--simulate-fail" or a.startswith("--simulate-fail=")]
+    if check_only and not scheduled:
+        return _usage_error("--check-only працює лише разом із --scheduled")
+    if sim_args:
+        key = sim_args[0].partition("=")[2]
+        if scheduled or check_only:
+            return _usage_error("--simulate-fail працює лише з ручним запуском (не з --scheduled)")
+        if key not in SIMULATE_KEYS:
+            return _usage_error(f"--simulate-fail=<{'|'.join(SIMULATE_KEYS)}>, отримано {key!r}")
+        return _simulate(key)
+    if check_only:
+        due, text = schedule_gate.describe()
+        print(text)
+        return 0
     if scheduled:
         due, why = schedule_gate.is_due()
         if not due:
@@ -273,6 +351,7 @@ def _run() -> int:
     # Мітка початку: рядок «ЗАПУСК ПОЧАТО» у «Результат щоденної перевірки»; Крок 4 оновить його
     # наприкінці. Якщо запуск обірветься — мітка лишиться як свідчення.
     start_marker = mark_run_started(selfcheck_timestamp)
+    _check_metrics_headers()
 
     try:
         step1_result = run_step1(utc_today=utc_today, local_today=local_today)

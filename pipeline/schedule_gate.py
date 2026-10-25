@@ -37,6 +37,16 @@ def is_due(now_utc: datetime | None = None) -> tuple[bool, str]:
     return True, f"{local:%Y-%m-%d %H:%M} {config.CANDIDATE_LOCAL_TZ} ≥ {config.SCHEDULE_RUN_AT_LOCAL}"
 
 
+def describe(now_utc: datetime | None = None) -> tuple[bool, str]:
+    """Рішення розкладу для `--scheduled --check-only`: (потрібен?, текст з часом у Варшаві)."""
+    now_utc = now_utc or datetime.now(ZoneInfo("UTC"))
+    local = now_utc.astimezone(ZoneInfo(config.CANDIDATE_LOCAL_TZ))
+    due, why = is_due(now_utc)
+    head = (f"Час: {local:%Y-%m-%d %H:%M} {config.CANDIDATE_LOCAL_TZ} (UTC {now_utc:%H:%M}); "
+            f"розклад: {config.SCHEDULE_RUN_AT_LOCAL} {config.CANDIDATE_LOCAL_TZ}.")
+    return due, f"{head}\n{'ЗАПУСК ПОТРІБЕН' if due else 'ЗАПУСК НЕ ПОТРІБЕН'}, бо {why}."
+
+
 def mark_started(now_utc: datetime | None = None) -> None:
     now_utc = now_utc or datetime.now(ZoneInfo("UTC"))
     local = now_utc.astimezone(ZoneInfo(config.CANDIDATE_LOCAL_TZ))

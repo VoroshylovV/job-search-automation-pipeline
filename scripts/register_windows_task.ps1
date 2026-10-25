@@ -8,14 +8,29 @@
 # today (Warsaw date). DST changes and the PC time zone therefore do not matter, and
 # StartWhenAvailable-like behaviour is kept: if the PC was off at 12:00, the first wake-up
 # after it is back on runs the pipeline. To change the time, edit SCHEDULE_RUN_AT_LOCAL.
+#
+# -CheckOnly registers a SEPARATE one-shot test task "<TaskName>-CheckOnly" that runs
+# `main.py --scheduled --check-only` (prints the schedule decision to logs\scheduler.log, exit code 0,
+# does NOT run the pipeline). Start it with: Start-ScheduledTask -TaskName JobSearchPipeline-CheckOnly
 param(
     [string]$TaskName = "JobSearchPipeline",
-    [int]$WakeEveryMinutes = 15
+    [int]$WakeEveryMinutes = 15,
+    [switch]$CheckOnly
 )
 
 $repo = Split-Path -Parent $PSScriptRoot
 $bat = Join-Path $repo "scripts\run_pipeline.bat"
 $vbs = Join-Path $repo "scripts\run_hidden.vbs"
+
+if ($CheckOnly) {
+    $checkName = "$TaskName-CheckOnly"
+    $checkAction = New-ScheduledTaskAction -Execute "wscript.exe" -Argument "`"$vbs`" --check-only" -WorkingDirectory $repo
+    $checkTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date).AddMinutes(1)
+    Register-ScheduledTask -TaskName $checkName -Action $checkAction -Trigger $checkTrigger -Force | Out-Null
+    Write-Host "Task '$checkName' registered (one-shot, runs in ~1 min; or: Start-ScheduledTask -TaskName $checkName)."
+    Write-Host "Read the schedule decision: Get-Content $repo\logs\scheduler.log -Tail 6 ; Last Result must be 0."
+    return
+}
 
 # Run through wscript + run_hidden.vbs so no console window appears.
 # Closing that window killed the run (Last Result -1073741510 = 0xC000013A).

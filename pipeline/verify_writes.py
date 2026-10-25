@@ -78,10 +78,10 @@ def check_reject_log(ctx: VerifyContext) -> tuple[bool, str]:
     if not _same_date(modified, ctx.utc_today):
         return False, f"лог відсіву: modifiedTime {modified} не сьогодні"
     values = sheets.read_values(f["id"], "A1:ZZ")
-    if not values or len(values) < 2 or reject_log.SUMMARY_MARK not in (values[-1][5:6] or [""]):
+    if not values or len(values) < 2 or not reject_log.is_summary_row(values[-1]):
         return False, "лог відсіву: останній рядок не «ПІДСУМОК»"
     found = ctx.step1_result.get("total_found_before_filters", 0)
-    data_rows = len(values) - 2  # без заголовка й підсумку
+    data_rows = len(reject_log.data_rows(values))  # без заголовка й «ПІДСУМОК»
     if data_rows < math.ceil(found * VERIFY_MIN_ROWS_SHARE):
         return False, f"лог відсіву: рядків {data_rows} з {found} знайдених (< {VERIFY_MIN_ROWS_SHARE:.0%})"
     return True, ""
@@ -101,10 +101,17 @@ def check_shown_log(ctx: VerifyContext) -> tuple[bool, str]:
         text = _dedup_doc_text()
     except Exception as exc:  # noqa: BLE001
         return False, f"лог показаних вакансій не прочитано ({exc})"
-    count = sum(1 for line in text.splitlines() if line.strip().startswith(today) and "|" in line)
+    lines = [ln.strip() for ln in text.splitlines()]
+    count = sum(1 for line in lines if line.startswith(today) and "|" in line)
     repeat = bool((ctx.reject_log or {}).get("run_index"))
     if count < shown or (count != shown and not repeat):
         return False, f"лог показаних: за сьогодні {count} рядків, показано {shown}"
+    # Повтор N того ж дня: у логу вже є рядки попередніх запусків, тож «не менше» саме по собі
+    # не доводить запису ЦЬОГО запуску — вимагаємо, щоб усі його рядки були на місці.
+    own = [ln.strip() for ln in ctx.step1_result.get("shown_log_lines") or []]
+    missing = [ln for ln in own if ln not in lines]
+    if missing:
+        return False, f"лог показаних: не записано {len(missing)} з {len(own)} рядків цього запуску"
     return True, ""
 
 
@@ -202,6 +209,21 @@ CHECKS = [
     ("джерела", check_sources, None),
 ]
 
+# --simulate-fail=<ключ> -> назва перевірки в CHECKS
+SIMULATE_KEYS = {"log": "лог відсіву", "shown": "лог показаних", "metrics": "метрики", "check": "результат перевірки",
+                 "sources": "джерела"}
+
+
+def check_metrics_headers() -> tuple[list[str] | None, list[str]]:
+    """Реальні заголовки аркуша метрик (тест гітхаб) і колонки METRICS_KEY_COLUMNS, яких у ньому немає.
+    (None, []) — аркуша ще немає (його буде створено). Викликається на початку запуску."""
+    f = drive.find_file_by_title(METRICS_SHEET_TITLE, RESUME_FOLDER_ID)
+    if not f:
+        return None, []
+    rows = sheets.read_values(f["id"], "A1:ZZ1")
+    header = [h.strip() for h in (rows[0] if rows else [])]
+    return header, [c for c in METRICS_KEY_COLUMNS if c not in header]
+
 
 def _run_check(fn, ctx) -> tuple[bool, str]:
     try:
@@ -211,10 +233,18 @@ def _run_check(fn, ctx) -> tuple[bool, str]:
         return False, f"не вдалось перевірити ({type(exc).__name__}: {exc})"
 
 
-def verify_writes(ctx: VerifyContext) -> VerifyResult:
-    """Перевірка → (для невдалих) одна спроба дозапису → повторна перевірка → тривога НЕ ЗАПИСАНО."""
+def verify_writes(ctx: VerifyContext, simulate_fail: str | None = None) -> VerifyResult:
+    """Перевірка → (для невдалих) одна спроба дозапису → повторна перевірка → тривога НЕ ЗАПИСАНО.
+    simulate_fail (ключ з SIMULATE_KEYS) — навчальна тривога: лише ця перевірка «падає» (і дозапис не
+    допомагає), решта не виконується, у Drive нічого не читається й не пишеться."""
     failed: list[str] = []
     repaired: list[str] = []
+    if simulate_fail:
+        target = SIMULATE_KEYS[simulate_fail]
+        failed = [f"{target}: СИМУЛЯЦІЯ ЗБОЮ (--simulate-fail={simulate_fail}), таблиці не чіпали"]
+        for why in reversed(failed):
+            alarm.add_not_written(why)
+        return VerifyResult(ok=False, failed=failed)
     for name, check, repair in CHECKS:
         ok, why = _run_check(check, ctx)
         if not ok and repair is not None:

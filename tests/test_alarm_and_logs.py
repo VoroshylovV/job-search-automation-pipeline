@@ -252,6 +252,7 @@ def _patched_main(monkeypatch, tmp_path, step1_result, rl_verified=True):
     main = importlib.import_module("main")
     pushes = []
     monkeypatch.setattr(main, "mark_run_started", lambda ts: {})
+    monkeypatch.setattr(main, "_check_metrics_headers", lambda: None)  # окремо: tests/test_followups.py
     monkeypatch.setattr(main, "run_step1", lambda **k: step1_result)
     monkeypatch.setattr(main, "write_reject_log", lambda d, t, summary=None: {"verified": rl_verified, "error": "кількість рядків не збіглась",
                                                                "local_path": "logs/2026-10-26.csv"})
