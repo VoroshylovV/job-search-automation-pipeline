@@ -416,7 +416,7 @@ def _evaluate_batch(chunk: list[RawJobPosting], today: date, stage: str,
     """Оцінка одного батча. Обрізана відповідь (max_tokens) — батч ділиться
     навпіл і кожна половина повторюється; помилка Claude → None (вакансії
     батча лишаються неоціненими), ліміт бюджету → маркер «ліміт бюджету»
-    (виклик не робиться). Решту Кроку 1 це не валить."""
+    (виклик не робиться); відповідь невалідного типу → None. Решту Кроку 1 це не валить."""
     static, dynamic = build_vacancy_eval_parts(chunk, today=today, stage=stage, full_texts=chunk_texts)
     try:
         response = call_json(
@@ -445,8 +445,22 @@ def _evaluate_batch(chunk: list[RawJobPosting], today: date, stage: str,
     except Exception as exc:  # noqa: BLE001 - будь-яка помилка API/JSON не має валити Крок 1
         logger.error("Батч з %d вакансій не оцінено (помилка Claude): %s", len(chunk), exc)
         return None
+    # Відповідь — {"evaluations": [...]} (як у промпті) АБО просто список оцінок. Інший тип —
+    # вузьке перехоплення: лог, батч неоцінений (None -> маркер «помилка_Claude»), Крок 1 не падає.
+    if isinstance(response, dict):
+        evaluations = response.get("evaluations", [])
+        bad_type = None if isinstance(evaluations, list) else f"dict.evaluations: {type(evaluations).__name__}"
+    elif isinstance(response, list):
+        evaluations, bad_type = response, None
+    else:
+        evaluations, bad_type = [], type(response).__name__
+    if bad_type:
+        logger.error("Батч з %d вакансій не оцінено: невалідний формат відповіді (%s)", len(chunk), bad_type)
+        return None
     result: dict[int, dict] = {}
-    for ev in response.get("evaluations", []):
+    for ev in evaluations:
+        if not isinstance(ev, dict):
+            continue  # елемент не об'єкт оцінки — пропускаємо, решту батча не губимо
         idx = ev.get("raw_index")
         if isinstance(idx, int) and 0 <= idx < len(chunk):
             result[idx] = ev
