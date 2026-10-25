@@ -38,6 +38,17 @@ def build_rows(decisions: list[dict], utc_today: date) -> list[list[str]]:
     ]
 
 
+SUMMARY_MARK = "ПІДСУМОК"
+
+
+def summary_row(utc_today: date, text: str) -> list[str]:
+    """Останній рядок логу: «ПІДСУМОК» у колонці «Результат» (її перевіряє verify_writes)."""
+    row = [""] * len(REJECT_LOG_HEADER)
+    row[0], row[1], row[2] = utc_today.isoformat(), REJECT_LOG_SYSTEM_LABEL, SUMMARY_MARK
+    row[4], row[5], row[6], row[7], row[10] = SUMMARY_MARK, SUMMARY_MARK, "—", text, "—"
+    return row
+
+
 def drive_title(utc_today: date, n: int = 0) -> str:
     base = f"Лог відсіву {utc_today.isoformat()} ({REJECT_LOG_SYSTEM_LABEL})"
     return base if n == 0 else f"{base} (повтор {n})"
@@ -52,10 +63,12 @@ def _by_source(rows: list[list[str]]) -> list[list[list[str]]]:
     return [groups[k] for k in sorted(groups, key=lambda s: (order.get(s, len(order)), s))]
 
 
-def write_reject_log(decisions: list[dict], utc_today: date) -> dict:
+def write_reject_log(decisions: list[dict], utc_today: date, summary: str | None = None) -> dict:
     """Локальний файл -> Drive (+1 повтор) -> перевірка кількості рядків.
-    Повертає {local_path, run_index, title, rows, file_id, verified, error}."""
+    summary — текст останнього рядка «ПІДСУМОК» (додається ПІСЛЯ рядків по джерелах).
+    Повертає {local_path, run_index, title, rows, file_id, verified, error, values}."""
     rows = build_rows(decisions, utc_today)
+    summary_rows = [summary_row(utc_today, summary)] if summary is not None else []
     n = local_log.next_run_index(
         utc_today, lambda i: drive.find_file_by_title(drive_title(utc_today, i), REJECT_LOG_FOLDER_ID) is not None
     )
@@ -63,10 +76,11 @@ def write_reject_log(decisions: list[dict], utc_today: date) -> dict:
     runlog = local_log.RunLog(utc_today, n, REJECT_LOG_HEADER)
     for group in _by_source(rows):
         runlog.append_rows(group)
+    runlog.append_rows(summary_rows)
+    values = [REJECT_LOG_HEADER] + rows + summary_rows
     result = {"local_path": str(runlog.path), "run_index": n, "title": title, "rows": len(rows),
-              "file_id": None, "verified": False, "error": ""}
+              "file_id": None, "verified": False, "error": "", "values": values}
 
-    values = [REJECT_LOG_HEADER] + rows
     state: dict[str, str] = {}
 
     def upload() -> None:
@@ -89,3 +103,16 @@ def write_reject_log(decisions: list[dict], utc_today: date) -> dict:
         result["file_id"] = state.get("id")
         result["error"] = str(exc)
     return result
+
+
+def repair_reject_log(result: dict) -> None:
+    """Одна спроба дозапису для verify_writes: перезаписує вміст файлу логу запуску
+    (створює його, якщо його немає). Піднімає виняток, якщо не вдалось."""
+    file_id = result.get("file_id")
+    if not file_id:
+        existing = drive.find_file_by_title(result["title"], REJECT_LOG_FOLDER_ID)
+        file_id = existing["id"] if existing else drive.create_spreadsheet(result["title"], REJECT_LOG_FOLDER_ID)
+        result["file_id"] = file_id
+    sheets_service().spreadsheets().values().update(
+        spreadsheetId=file_id, range="A1", valueInputOption="RAW", body={"values": result["values"]},
+    ).execute()

@@ -30,6 +30,7 @@ from pipeline.step2_mail import run_step2
 from pipeline.step3_metrics import run_step3
 from pipeline.step3_tracker import run_step3_tracker
 from pipeline.step4_selfcheck import format_selfcheck_block, mark_run_started, run_step4
+from pipeline.verify_writes import VERIFIED_OK_LINE, VerifyContext, verify_writes
 from pipeline.step5_comparison import format_comparison_block, run_step5
 
 # Windows: при перенаправленні stdout у файл (Task Scheduler -> logs/scheduler.log)
@@ -108,10 +109,14 @@ def format_report(
     step4_result: dict,
     step5_result: dict | None = None,
     alarms: list[str] | None = None,
+    verified_ok: bool = False,
 ) -> str:
     lines: list[str] = []
     if alarms:  # ПЕРШІ рядки звіту (консоль, reports/); те саме — на початку push
         lines.append(alarm.format_block(alarms))
+        lines.append("")
+    if verified_ok:  # підсумок верифікації запису (pipeline/verify_writes.py)
+        lines.append(VERIFIED_OK_LINE)
         lines.append("")
     vacancies = step1_result["vacancies"]
 
@@ -218,6 +223,18 @@ def format_report(
     return "\n".join(lines)
 
 
+def _reject_log_summary(step1_result: dict) -> str:
+    """Текст останнього рядка логу відсіву («ПІДСУМОК»)."""
+    from collections import Counter
+    results = Counter(d["result"] for d in step1_result.get("decisions", []))
+    parts = [f"знайдено {step1_result.get('total_found_before_filters', 0)}",
+             f"показано {len(step1_result.get('vacancies', []))}",
+             f"відсіяно {results.get('відсіяно', 0)}", f"майже {results.get('майже', 0)}",
+             f"не оцінено {sum(n for r, n in results.items() if r.startswith('не оцінено'))}",
+             f"рядків {sum(results.values())}"]
+    return "; ".join(parts)
+
+
 def main(argv: list[str] | None = None) -> int:
     """Код виходу: 0 — штатно; EXIT_CODE_ALARM (2) — була тривога; 1 — аварія поза кроками."""
     argv = sys.argv[1:] if argv is None else argv
@@ -274,8 +291,9 @@ def _run() -> int:
 
     # Діагностичний лог причин відсіву (порівняння з онлайн-версією): локальний файл ->
     # Drive (+1 повтор) -> перевірка кількості рядків. Збій не валить решту запуску, але = тривога.
+    rl = None
     try:
-        rl = write_reject_log(step1_result.get("decisions", []), utc_today)
+        rl = write_reject_log(step1_result.get("decisions", []), utc_today, summary=_reject_log_summary(step1_result))
         if not rl["verified"]:
             alarm.add(f"лог відсіву не вивантажено в Drive або кількість рядків не збіглась ({rl['error']}); "
                       f"локальна копія: {rl['local_path']}")
@@ -321,6 +339,7 @@ def _run() -> int:
     # БЕЗУМОВНО, навіть якщо щось у Кроці 3/4/формуванні звіту несподівано
     # впаде — той самий принцип "сповіщення завжди", що й у чат-версії.
     report_printed = False
+    verified_ok = False
     try:
         step3_result = run_step3(step1_result, step2_result, utc_today=utc_today)
         # Крок 3 (таблиця відгуків) — власний try: збій запису в ручну
@@ -362,9 +381,20 @@ def _run() -> int:
         except Exception:
             logger.exception("Запис у logs/costs.csv не вдався")
 
+        # ОСТАННЯ дія перед звітом/push: verify_writes() — без викликів моделі. Тривога
+        # «НЕ ЗАПИСАНО: …» стає першим рядком; усе гаразд — «✅ ВСЕ ЗАПИСАНО І ПЕРЕВІРЕНО».
+        try:
+            verified_ok = verify_writes(VerifyContext(
+                utc_today=utc_today, step1_result=step1_result, step3_result=step3_result, step4_result=step4_result,
+                selfcheck_timestamp=selfcheck_timestamp, start_marker=start_marker, reject_log=rl,
+            )).ok and not alarm.active()
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("verify_writes не виконалась")
+            alarm.add_not_written(f"верифікацію запису не виконано ({type(exc).__name__}: {exc})")
+
         report = format_report(
             step1_result, step1_2_result, step2_result, step3_result, step4_result, step5_result,
-            alarms=alarm.reasons(),
+            alarms=alarm.lines(), verified_ok=verified_ok,
         )
         print(report)
         report_printed = True
@@ -382,9 +412,12 @@ def _run() -> int:
         logger.info("Вартість Claude за запуск: $%.4f (%d викликів)", cost_tracker.total_usd, cost_tracker.calls)
         if alarm.active() and not report_printed:
             print(alarm.format_block())
-        sent = notify.send_push(notify.build_message(alarm.format_block()), urgent=alarm.active())
+        sent = notify.send_push(
+            notify.build_message(alarm.format_block(), ok_line=VERIFIED_OK_LINE if verified_ok else ""),
+            urgent=alarm.active(),
+        )
         if alarm.active() and not sent:
-            logger.error("Push із тривогою не надіслано — див. консоль/звіт: %s", "; ".join(alarm.reasons()))
+            logger.error("Push із тривогою не надіслано — див. консоль/звіт: %s", "; ".join(alarm.lines()))
 
     return EXIT_CODE_ALARM if alarm.active() else 0
 

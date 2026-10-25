@@ -835,6 +835,11 @@ def run_step1(utc_today: date | None = None, local_today: date | None = None) ->
     # перезаписувати лог тим, чого не читали, ризиковано: могли б стерти
     # рядки, що просто не вдалось прочитати в ЦЬОМУ запуску).
     dedup_log_updated = False
+    # Рядки Логу показаних за цей запуск (формат рядка не змінюється) — також для verify_writes.
+    shown_log_lines = [
+        f"{utc_today.isoformat()} | {v.url or f'(без прямого URL, {v.source})'} | {v.title} — {v.company}"
+        for v in scored
+    ]
     if log_text is not None and dedup_doc_id:
         try:
             cutoff = utc_today - timedelta(days=DEDUP_LOG_MAX_AGE_DAYS)
@@ -847,10 +852,7 @@ def run_step1(utc_today: date | None = None, local_today: date | None = None) ->
                 if entry_date >= cutoff:
                     kept_lines.append(f"{entry.shown_date} | {entry.identifier} | {entry.label}")
 
-            new_lines = [
-                f"{utc_today.isoformat()} | {v.url or f'(без прямого URL, {v.source})'} | {v.title} — {v.company}"
-                for v in scored
-            ]
+            new_lines = shown_log_lines
 
             header = (
                 "Лог показаних вакансій — службовий файл автоматичного пайплайна. "
@@ -887,4 +889,5 @@ def run_step1(utc_today: date | None = None, local_today: date | None = None) ->
         "budget_unevaluated_count": budget_unevaluated_count,
         "stage2_capped_count": stage2_capped_count,
         "shadow": shadow,
+        "shown_log_lines": shown_log_lines,
     }

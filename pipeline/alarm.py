@@ -10,22 +10,35 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-_alarms: list[str] = []
+_alarms: list[str] = []  # готові рядки тривог
 _MAX_REASON_LEN = 220
+NOT_WRITTEN_PREFIX = "НЕ ЗАПИСАНО: "
 
 
 def reset() -> None:
     _alarms.clear()
 
 
-def add(reason: str) -> None:
+def add(reason: str, *, first: bool = False) -> None:
+    """Додає тривогу `🚨🚨🚨 **!!! ПРИЧИНА !!!**`; first=True — ставить її першим рядком."""
     reason = " ".join(str(reason).split())[:_MAX_REASON_LEN]
-    if reason and reason not in _alarms:
-        _alarms.append(reason)
-        logger.error("ТРИВОГА: %s", reason)
+    _add_line(format_line(reason), reason, first)
 
 
-def reasons() -> list[str]:
+def add_not_written(what: str) -> None:
+    """Тривога верифікації запису: `🚨🚨🚨 !!! НЕ ЗАПИСАНО: <що саме> !!!` — ПЕРШИМ рядком."""
+    what = " ".join(str(what).split())[:_MAX_REASON_LEN]
+    _add_line(f"🚨🚨🚨 !!! {NOT_WRITTEN_PREFIX}{what.upper()} !!!", what, first=True)
+
+
+def _add_line(line: str, reason: str, first: bool) -> None:
+    if reason and line not in _alarms:
+        _alarms.insert(0, line) if first else _alarms.append(line)
+        logger.error("ТРИВОГА: %s", line)
+
+
+def lines() -> list[str]:
+    """Готові рядки тривог (для звіту)."""
     return list(_alarms)
 
 
@@ -38,9 +51,8 @@ def format_line(reason: str) -> str:
 
 
 def format_block(items: list[str] | None = None) -> str:
-    """Один рядок на причину; порожній рядок, якщо тривог немає."""
-    items = _alarms if items is None else items
-    return "\n".join(format_line(r) for r in items)
+    """Готові рядки тривог по одному в рядок; порожній рядок, якщо тривог немає."""
+    return "\n".join(_alarms if items is None else items)
 
 
 def collect_from_results(step1: dict, step1_2: dict | None, step2: dict | None,

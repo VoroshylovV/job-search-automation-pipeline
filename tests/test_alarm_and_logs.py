@@ -253,7 +253,7 @@ def _patched_main(monkeypatch, tmp_path, step1_result, rl_verified=True):
     pushes = []
     monkeypatch.setattr(main, "mark_run_started", lambda ts: {})
     monkeypatch.setattr(main, "run_step1", lambda **k: step1_result)
-    monkeypatch.setattr(main, "write_reject_log", lambda d, t: {"verified": rl_verified, "error": "кількість рядків не збіглась",
+    monkeypatch.setattr(main, "write_reject_log", lambda d, t, summary=None: {"verified": rl_verified, "error": "кількість рядків не збіглась",
                                                                "local_path": "logs/2026-10-26.csv"})
     monkeypatch.setattr(main, "run_step1_2", lambda **k: {"projects": [], "source_statuses": {}, "metrics_saved": True})
     monkeypatch.setattr(main, "run_step2", lambda: {"findings": [], "total_emails_found": 0})
@@ -261,6 +261,7 @@ def _patched_main(monkeypatch, tmp_path, step1_result, rl_verified=True):
     monkeypatch.setattr(main, "run_step3_tracker", lambda r: {"status": "OK", "note": ""})
     monkeypatch.setattr(main, "run_step4", lambda *a, **k: {"result": None, "saved": True})
     monkeypatch.setattr(main, "run_step5", lambda *a, **k: {"active": False})
+    monkeypatch.setattr(main, "verify_writes", lambda ctx: SimpleNamespace(ok=True, failed=[]))
     monkeypatch.setattr(main, "format_selfcheck_block", lambda r: "")
     monkeypatch.setattr(main, "append_cost_row", lambda r: None)
     monkeypatch.setattr(main, "build_row", lambda *a, **k: [])
@@ -295,7 +296,9 @@ def test_main_reject_log_mismatch_raises_alarm(monkeypatch, tmp_path, capsys):
 def test_main_clean_run_exit_zero_and_plain_push(monkeypatch, tmp_path, capsys):
     main, pushes = _patched_main(monkeypatch, tmp_path, _step1())
     assert main.main([]) == 0
-    assert not capsys.readouterr().out.startswith("🚨") and pushes[0] == (main.notify.PUSH_MESSAGE_TEXT, False)
+    out = capsys.readouterr().out
+    assert out.startswith("✅ ВСЕ ЗАПИСАНО І ПЕРЕВІРЕНО") and "🚨" not in out
+    assert pushes[0] == (main.notify.PUSH_MESSAGE_TEXT + "\n✅ ВСЕ ЗАПИСАНО І ПЕРЕВІРЕНО", False)
 
 
 def test_main_unexpected_crash_returns_1_and_pushes_alarm(monkeypatch, tmp_path, capsys):

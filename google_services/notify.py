@@ -22,9 +22,11 @@ from config import PUSH_MESSAGE_TEXT, PUSH_NTFY_SERVER, PUSH_NTFY_TOPIC
 logger = logging.getLogger(__name__)
 
 
-def build_message(alarm_block: str = "", message: str = PUSH_MESSAGE_TEXT) -> str:
-    """Тривога (🚨🚨🚨 **!!! … !!!**) — на початку повідомлення, перед стандартним текстом."""
-    return f"{alarm_block}\n\n{message}" if alarm_block else message
+def build_message(alarm_block: str = "", message: str = PUSH_MESSAGE_TEXT, ok_line: str = "") -> str:
+    """Тривога (🚨🚨🚨 …) — на початку повідомлення, перед стандартним текстом; ok_line
+    («✅ ВСЕ ЗАПИСАНО І ПЕРЕВІРЕНО») — наприкінці, якщо верифікація запису пройшла."""
+    text = f"{alarm_block}\n\n{message}" if alarm_block else message
+    return f"{text}\n{ok_line}" if ok_line else text
 
 
 def send_push(message: str = PUSH_MESSAGE_TEXT, urgent: bool = False) -> bool:
