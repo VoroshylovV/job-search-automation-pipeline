@@ -20,3 +20,6 @@ tg_market/data/
 
 # Журнал вартості дописується щодня на ПК — у git лише базова лінія (docs/costs_baseline.csv)
 logs/costs.csv
+# Локальні логи запуску (спершу пишуться на диск, потім у Drive) і стан розкладу
+logs/*.csv
+logs/*.txt

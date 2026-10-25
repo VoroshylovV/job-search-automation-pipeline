@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from dotenv import load_dotenv
 
@@ -21,12 +22,15 @@ load_dotenv()  # читає .env у робочій директорії, якщ�
 # (див. .env.example). Google credentials — з credentials/credentials.json
 # (OAuth client secret, завантажений з Google Cloud Console).
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
-CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "claude-sonnet-5-5")
-# Модель для етапу 1 (оцінка карток). Тиждень C (19–25.10.2026): Sonnet 5.5 на
-# всіх етапах, як і в онлайн-версії, щоб виміряти ефект Haiku на етапі 1 (B→C,
-# docs/analysis/rejection-log/02_changes.md). Повернути Haiku:
-# CLAUDE_MODEL_CARDS=claude-haiku-4-5-20251001 у .env.
-CLAUDE_MODEL_CARDS = os.environ.get("CLAUDE_MODEL_CARDS", CLAUDE_MODEL)
+# З прогону 26.10.2026: етап 1 (картки) йде паралельно на двох моделях з тим самим
+# промптом. Вердикти ОСНОВНОЇ гілки (Sonnet 5.5) — єдині, що впливають на вивід,
+# відбір, етап 2 і ліміти. Тіньова гілка (Haiku 5.5) лише пишеться в лог відсіву
+# (колонки «Вердикт Haiku»/«Вердикт Sonnet») і в метрики розбіжностей; її вартість
+# не входить у ліміт бюджету запуску. Порожнє CLAUDE_MODEL_CARDS_SHADOW вимикає тінь.
+# Етап 2 (повні тексти) і всі інші виклики моделі (пошта, фріланс, tg_market) — CLAUDE_MODEL.
+CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-5")
+CLAUDE_MODEL_CARDS = os.environ.get("CLAUDE_MODEL_CARDS", "claude-sonnet-5-5")
+CLAUDE_MODEL_CARDS_SHADOW = os.environ.get("CLAUDE_MODEL_CARDS_SHADOW", "claude-haiku-5-5")
 CLAUDE_MODEL_FULLTEXT = os.environ.get("CLAUDE_MODEL_FULLTEXT", CLAUDE_MODEL)
 # Етап 2 (повний текст, дорогий): не більше стільки вакансій, лише High/Medium з етапу 1.
 MAX_FULLTEXT_VACANCIES = 20
@@ -267,6 +271,35 @@ SENIORITY_STOP_PATTERN = (
     r"\b(senior|middle|lead|head|principal|staff|director|chief|"
     r"сеньйор|мідл|керівник|начальник|провідний|старший)\b|\bsr\.?\b|\bteam\s*lead"
 )
+
+# --------------------------------------------------------------------------
+# Тривога, локальні логи, розклад (26.10.2026)
+# --------------------------------------------------------------------------
+# Локальні логи: logs/YYYY-MM-DD.csv (повтор того ж дня — «YYYY-MM-DD (повтор N).csv»)
+# пишуться ПЕРШИМИ, потім вивантажуються в Drive; logs/source_counts.csv — історія
+# кількості карток по джерелах (база для тривоги «0 карток там, де зазвичай десятки»).
+LOGS_DIR = str(Path(__file__).resolve().parent / "logs")
+ALARM_BASELINE_RUNS = 7            # скільки останніх запусків джерела беремо в базу
+ALARM_BASELINE_MIN_RUNS = 3        # менше записів — бази немає, тривоги за нулем нема
+ALARM_ZERO_CARDS_BASELINE_MIN = 10  # «зазвичай десятки»: медіана бази ≥ цього при 0 карток = тривога
+SELFCHECK_RUN_STARTED_MARK = "ЗАПУСК ПОЧАТО"
+# verify_writes (кінець запуску): лог відсіву має ≥ цієї частки «знайдено» рядків даних;
+# ключові колонки метрик за сьогодні мають бути заповнені.
+VERIFY_MIN_ROWS_SHARE = 0.90
+METRICS_KEY_COLUMNS = (
+    "Дата запуску",
+    "Загальна кількість вакансій, знайдених на всіх джерелах до фільтрації",
+    "Показані вакансії (пройшли всі фільтри)",
+    "Статус djinni.co", "Статус jobs.dou.ua", "Статус robota.ua", "Статус work.ua", "Статус happymonday.ua",
+    "Вартість Claude, $ разом",
+    "Модель крок 1 (картки)", "Модель крок 2 (повні тексти)",
+)
+EXIT_CODE_ALARM = 2                # ненульовий exit code при тривозі (аварія без виключення = 1)
+# Розклад — за часом Europe/Warsaw (CANDIDATE_LOCAL_TZ), а не UTC і не поясом ПК:
+# Task Scheduler будить `main.py --scheduled` кожні 15 хв, а запуск відбувається, лише
+# коли у Варшаві вже ≥ SCHEDULE_RUN_AT_LOCAL і сьогодні (за Варшавою) ще не стартував.
+SCHEDULE_RUN_AT_LOCAL = "12:00"
+SCHEDULE_STATE_FILE = "last_scheduled_run.txt"  # у LOGS_DIR
 
 SOURCES = ("djinni.co", "jobs.dou.ua", "robota.ua", "work.ua", "happymonday.ua")
 

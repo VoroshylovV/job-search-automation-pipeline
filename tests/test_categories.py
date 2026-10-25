@@ -158,11 +158,11 @@ def test_disability_keyword_only_on_full_page(monkeypatch):
 
 
 def test_reject_log_has_category_as_11th_column_after_date_source():
-    assert len(REJECT_LOG_HEADER) == 11
+    assert len(REJECT_LOG_HEADER) == 13  # + «Вердикт Haiku», «Вердикт Sonnet» (26.10.2026)
     assert REJECT_LOG_HEADER[9] == "Джерело дати" and REJECT_LOG_HEADER[10] == "Категорія"
     res = _run([_job(0, "ЛОВЗ")], [_ev(0, veteran=True)])
     row = build_rows(res["decisions"], TODAY)[0]
-    assert len(row) == 11 and row[10] == "обидві" and row[5] == "показано" and row[6] == "—"
+    assert len(row) == 13 and row[10] == "обидві" and row[5] == "показано" and row[6] == "—"
 
 
 def test_near_miss_gets_category():

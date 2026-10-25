@@ -10,7 +10,7 @@ import logging
 import subprocess
 from pathlib import Path
 
-from claude_orchestrator.cost import STAGES, tracker as cost_tracker
+from claude_orchestrator.cost import SHADOW_STAGES, STAGES, tracker as cost_tracker
 from config import COSTS_CSV_PATH
 
 logger = logging.getLogger(__name__)
@@ -58,7 +58,7 @@ def build_row(timestamp_utc: str, step1_result: dict, selfcheck, step5_result: d
 
     models = ";".join(
         f"{stage}={'+'.join(sorted(cost_tracker.stage(stage).models))}"
-        for stage in STAGES if cost_tracker.stage(stage).models
+        for stage in (*STAGES, *SHADOW_STAGES) if cost_tracker.stage(stage).models
     )
     row: list = [timestamp_utc, commit if commit is not None else git_commit(), models]
     for stage in STAGES:

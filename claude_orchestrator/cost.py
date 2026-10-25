@@ -19,11 +19,15 @@ logger = logging.getLogger(__name__)
 # Етапи обліку: cards — етап 1 (картки), fulltext — етап 2 (повні тексти),
 # freelance — Крок 1.2, mail — Крок 2, other — все інше.
 STAGES = ("cards", "fulltext", "freelance", "mail")
+# Тіньова гілка етапу 1 (Haiku) — не в STAGES (колонки costs.csv не змінюються),
+# входить у total_usd, але НЕ в budget_usd, за яким рахується ліміт запуску.
+SHADOW_STAGES = ("cards_shadow",)
 STAGE_TITLES = {
     "cards": "етап 1 (картки)",
     "fulltext": "етап 2 (повні тексти)",
     "freelance": "Крок 1.2 (фріланс)",
     "mail": "Крок 2 (пошта)",
+    "cards_shadow": "етап 1, тінь (Haiku)",
     "other": "інше",
 }
 
@@ -90,11 +94,16 @@ class CostTracker:
         return sum(st.usd for st in self.stages.values())
 
     @property
+    def budget_usd(self) -> float:
+        """Вартість, що йде в ліміт запуску: без тіньових етапів."""
+        return sum(st.usd for name, st in self.stages.items() if name not in SHADOW_STAGES)
+
+    @property
     def calls(self) -> int:
         return sum(st.calls for st in self.stages.values())
 
     def exceeded(self, limit_usd: float | None) -> bool:
-        return limit_usd is not None and self.total_usd >= limit_usd
+        return limit_usd is not None and self.budget_usd >= limit_usd
 
     def reset(self) -> None:
         self.stages = {}

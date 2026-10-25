@@ -24,11 +24,23 @@ def _fresh_tracker():
     cost.tracker.reset()
 
 
-def test_config_defaults_main_model_for_cards_and_fulltext():
-    # Тиждень C (19–25.10.2026): без змінних у .env усі етапи — CLAUDE_MODEL.
+def test_config_default_models_from_26_10(monkeypatch):
+    # З прогону 26.10.2026: етап 1 — Sonnet 5.5 (основна) + Haiku 5.5 (тінь);
+    # етап 2 і всі інші виклики моделі — Sonnet 4.5.
+    import importlib
     import config
-    assert config.CLAUDE_MODEL_CARDS == config.CLAUDE_MODEL
-    assert config.CLAUDE_MODEL_FULLTEXT == config.CLAUDE_MODEL
+    for var in ("CLAUDE_MODEL", "CLAUDE_MODEL_CARDS", "CLAUDE_MODEL_CARDS_SHADOW", "CLAUDE_MODEL_FULLTEXT"):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setattr("dotenv.load_dotenv", lambda *a, **k: None)
+    try:
+        importlib.reload(config)
+        assert config.CLAUDE_MODEL == "claude-sonnet-4-5"
+        assert config.CLAUDE_MODEL_CARDS == "claude-sonnet-5-5"
+        assert config.CLAUDE_MODEL_CARDS_SHADOW == "claude-haiku-5-5"
+        assert config.CLAUDE_MODEL_FULLTEXT == "claude-sonnet-4-5"
+    finally:
+        monkeypatch.undo()
+        importlib.reload(config)
 
 
 def test_call_json_uses_given_model_and_bills_by_it(monkeypatch):

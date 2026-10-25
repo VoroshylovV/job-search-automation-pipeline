@@ -70,6 +70,11 @@ def find_file_by_title(title: str, folder_id: str = RESUME_FOLDER_ID) -> dict | 
     return files[0] if files else None
 
 
+def get_modified_time(file_id: str) -> str:
+    """modifiedTime файлу (RFC 3339, UTC), напр. «2026-10-26T11:05:03.123Z»."""
+    return drive_service().files().get(fileId=file_id, fields="modifiedTime").execute()["modifiedTime"]
+
+
 def create_google_doc(title: str, folder_id: str = RESUME_FOLDER_ID) -> str:
     """Створює порожній Google Doc, повертає file_id."""
     service = drive_service()

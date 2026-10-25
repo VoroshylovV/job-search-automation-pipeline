@@ -80,6 +80,8 @@ class NearMissVacancy:
     code: str  # код критерію для лога відсіву
     posted_date: Optional[str] = None
     category: str = "—"  # ветеран / інвалідність / обидві / —
+    verdict_haiku: str = ""  # вердикти етапу 1 для логу відсіву (з 26.10.2026)
+    verdict_sonnet: str = ""
 
 
 @dataclass
@@ -100,6 +102,8 @@ class SourceStatus:
     source: str
     status: str = "OK"  # "OK" | "недоступне" | "дата невизначена"
     note: str = ""
+    count: Optional[int] = None  # скільки карток зібрано (None — не міряли)
+    anomaly: str = ""  # напр. «0 карток, хоча зазвичай ~40» — підстава для тривоги
 
 
 # --------------------------------------------------------------------------
@@ -218,6 +222,13 @@ class RunMetrics:
     cost_per_shown_usd: Optional[float] = None  # None -> "н/д" (нічого не показано)
     model_cards: str = ""     # «Sonnet 5.5» — модель етапу 1 (картки), з 19.10.2026
     model_fulltext: str = ""  # модель етапу 2 (повні тексти)
+    # Етап 1: порівняння вердиктів Sonnet 5.5 (основна) і Haiku 5.5 (тінь), з 26.10.2026.
+    model_cards_shadow: str = ""
+    shadow_compared: int = 0
+    shadow_agree: int = 0
+    shadow_disagree: int = 0
+    shadow_sonnet_pass_haiku_reject: int = 0
+    shadow_haiku_pass_sonnet_reject: int = 0
 
     def as_row(self) -> list:
         s = self.source_statuses
@@ -241,6 +252,12 @@ class RunMetrics:
             "н/д" if self.cost_per_shown_usd is None else round(self.cost_per_shown_usd, 4),
             self.model_cards,
             self.model_fulltext,
+            self.model_cards_shadow,
+            self.shadow_compared,
+            self.shadow_agree,
+            self.shadow_disagree,
+            self.shadow_sonnet_pass_haiku_reject,
+            self.shadow_haiku_pass_sonnet_reject,
         ]
 
 
@@ -265,6 +282,13 @@ METRICS_HEADER = [
     # 19.10.2026: назви 1:1 з колонками R:S, які вже є в таблиці метрик (тест гітхаб).
     "Модель крок 1 (картки)",
     "Модель крок 2 (повні тексти)",
+    # 26.10.2026: тіньова гілка етапу 1 — нові колонки лише в кінці.
+    "Модель крок 1 (тінь)",
+    "Етап 1: порівняно карток (Sonnet vs Haiku)",
+    "Етап 1: вердикти збіглись",
+    "Етап 1: вердикти розійшлись",
+    "Етап 1: Sonnet показав, Haiku відсіяв",
+    "Етап 1: Haiku показав, Sonnet відсіяв",
 ]
 
 
@@ -301,6 +325,8 @@ class SelfCheckResult:
     # кінець, щоб не зсувати вже наявні історичні рядки).
     step1_2_status: str = "НЕ ВИКОНАНО"
     step1_2_note: str = ""
+    # Етап 1, Sonnet vs Haiku (з 26.10.2026) — окрема колонка в кінці.
+    shadow_summary: str = "тінь вимкнено"
 
     def as_row(self) -> list:
         return [
@@ -319,6 +345,7 @@ class SelfCheckResult:
             self.only_low_or_zero_at_full_coverage,
             self.notes or "без зауважень",
             f"{self.step1_2_status}" + (f" — {self.step1_2_note}" if self.step1_2_note else ""),
+            self.shadow_summary,
         ]
 
 
@@ -335,6 +362,7 @@ SELFCHECK_HEADER = [
     "Лише Low/нуль при 5/5",
     "Примітки",
     "Крок 1.2 (фріланс)",
+    "Етап 1: Sonnet vs Haiku",
 ]
 
 
@@ -413,6 +441,8 @@ REJECT_LOG_HEADER = [
     "Дата запуску (UTC)", "Система", "Джерело", "URL", "Посада — компанія",
     "Результат", "Причина", "Деталі", "Дата публікації", "Джерело дати",
     "Категорія",  # 11-та, після «Джерело дати» (25.10.2026)
+    # З прогону 26.10.2026: стислі вердикти етапу 1 обох моделей (результат · причина · Match).
+    "Вердикт Haiku", "Вердикт Sonnet",
 ]
 REJECT_CODES = (
     "дубль", "подано", "роль", "досвід", "формат", "ЗП", "англійська",

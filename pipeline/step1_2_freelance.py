@@ -47,6 +47,7 @@ from config import (
     RESUME_FOLDER_ID,
 )
 from google_services import docs, drive, sheets
+from pipeline import local_log
 from models import FREELANCE_METRICS_HEADER, FreelanceRunMetrics, RawFreelanceProject, ScoredFreelanceProject, SourceStatus
 from scrapers import FREELANCE_SCRAPER_MODULES
 from scrapers.base import ScraperError
@@ -397,7 +398,7 @@ def run_step1_2(utc_today: date | None = None, local_today: date | None = None) 
             status_telegram=status_telegram,
             streak_zero_telegram=streak_tg,
         )
-        sheets.upsert_row_by_first_cell(sheet_id, metrics.as_row())
+        local_log.retry_once(lambda: sheets.upsert_row_by_first_cell(sheet_id, metrics.as_row()), "Запис метрики фрілансу в Drive")
         metrics_saved = True
     except Exception as exc:  # noqa: BLE001
         logger.exception("Не вдалось зберегти метрику фрілансу")
