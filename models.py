@@ -24,6 +24,13 @@ class RawJobPosting:
     location_raw: str = ""
 
 
+def category_label(veteran: bool, disability: bool) -> str:
+    """«ветеран» / «інвалідність» / «обидві» / «—» (config.CATEGORY_NONE)."""
+    if veteran and disability:
+        return "обидві"
+    return "ветеран" if veteran else ("інвалідність" if disability else "—")
+
+
 @dataclass
 class ScoredVacancy:
     """Вакансія після оцінки Claude — те, що йде у фінальний список Кроку 1."""
@@ -46,6 +53,13 @@ class ScoredVacancy:
     # Позначки в «Оцінка відповідності» (Правило И, 18.10.2026): «англ. B2+»,
     # «вимога: мат. освіта», «репост вакансії, показаної DD.MM».
     flags: list[str] = field(default_factory=list)
+    # Категорія «інвалідність» (ключові слова, config.DISABILITY_KEYWORDS); «ветеран» —
+    # veteran_bonus. Лише спосіб показу (окремий блок), на фільтри не впливає.
+    disability: bool = False
+
+    @property
+    def category(self) -> str:
+        return category_label(self.veteran_bonus, self.disability)
 
     def dedup_key(self) -> str:
         if self.url:
@@ -65,6 +79,7 @@ class NearMissVacancy:
     unmet: str  # яка саме умова не виконана
     code: str  # код критерію для лога відсіву
     posted_date: Optional[str] = None
+    category: str = "—"  # ветеран / інвалідність / обидві / —
 
 
 @dataclass
@@ -397,6 +412,7 @@ COMPARISON_HEADER = [
 REJECT_LOG_HEADER = [
     "Дата запуску (UTC)", "Система", "Джерело", "URL", "Посада — компанія",
     "Результат", "Причина", "Деталі", "Дата публікації", "Джерело дати",
+    "Категорія",  # 11-та, після «Джерело дати» (25.10.2026)
 ]
 REJECT_CODES = (
     "дубль", "подано", "роль", "досвід", "формат", "ЗП", "англійська",

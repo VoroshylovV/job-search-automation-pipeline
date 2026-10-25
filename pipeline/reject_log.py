@@ -21,7 +21,7 @@ def build_rows(decisions: list[dict], utc_today: date) -> list[list[str]]:
     return [
         [
             utc_today.isoformat(), REJECT_LOG_SYSTEM_LABEL, d["source"], d["url"], d["label"],
-            d["result"], d["code"], d["detail"], d["posted_date"], d["date_source"],
+            d["result"], d["code"], d["detail"], d["posted_date"], d["date_source"], d.get("category", "—"),
         ]
         for d in decisions
     ]

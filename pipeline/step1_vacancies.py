@@ -27,6 +27,7 @@ from __future__ import annotations
 import logging
 import re
 from dataclasses import dataclass
+from functools import partial
 from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
@@ -39,6 +40,7 @@ from config import (
     CLAUDE_EVAL_MAX_TOKENS,
     CLAUDE_MODEL_CARDS,
     CLAUDE_MODEL_FULLTEXT,
+    DISABILITY_KEYWORDS,
     MAX_FULLTEXT_VACANCIES,
     MAX_RUN_COST_USD,
     CLAUDE_FULL_EVAL_CHUNK_SIZE,
@@ -59,7 +61,7 @@ from config import (
     UNKNOWN_DATE_FALLBACK_LIMIT,
 )
 from google_services import docs, drive, sheets
-from models import NearMissVacancy, RawJobPosting, ScoredVacancy, SourceStatus
+from models import NearMissVacancy, RawJobPosting, ScoredVacancy, SourceStatus, category_label
 from scrapers import SCRAPER_MODULES
 from scrapers.base import ScraperError, age_days, coverage_status
 from scrapers.detail import fetch_full_text
@@ -324,9 +326,29 @@ def _in_window(posted_date: str | None, today: date, yesterday: date) -> bool:
         return True
 
 
+def detect_disability(text: str | None) -> bool:
+    """Категорія «інвалідність»: є хоч одне з config.DISABILITY_KEYWORDS (регістр
+    ігнорується, збіг за підрядком). Текст — повна сторінка, інакше картка."""
+    low = (text or "").lower()
+    return any(k.lower() in low for k in DISABILITY_KEYWORDS)
+
+
+def _card_text(job: RawJobPosting) -> str:
+    return f"{job.title}\n{job.description_snippet}"
+
+
+def _category(job: RawJobPosting, ev: dict | None = None, full_text: str | None = None) -> str:
+    """Категорія вакансії для виводу й логу відсіву. «Ветеран» — з оцінки моделі
+    (немає в стислій відповіді етапу 1 — тоді лише «інвалідність» за ключовими
+    словами), «інвалідність» — за повним текстом, інакше за карткою."""
+    veteran = bool(ev and ev.get("veteran_bonus"))
+    return category_label(veteran, detect_disability(full_text or _card_text(job)))
+
+
 def _decision(job: RawJobPosting, result: str, code: str, detail: str = "",
-              posted_date: str | None = None, date_source: str = "") -> dict:
-    """Рядок діагностичного логу причин відсіву (див. pipeline/reject_log.py)."""
+              posted_date: str | None = None, date_source: str = "", category: str | None = None) -> dict:
+    """Рядок діагностичного логу причин відсіву (див. pipeline/reject_log.py).
+    category: колонка «Категорія» (11-та); без неї — за карткою вакансії."""
     return {
         "source": job.source,
         "url": job.url or "",
@@ -336,6 +358,7 @@ def _decision(job: RawJobPosting, result: str, code: str, detail: str = "",
         "detail": detail,
         "posted_date": posted_date or "",
         "date_source": date_source,
+        "category": category if category is not None else _category(job),
     }
 
 
@@ -434,17 +457,21 @@ def _evaluate(jobs: list[RawJobPosting], today: date, stage: str,
 
 
 def _confirm_with_full_text(jobs: list[RawJobPosting], today: date,
-                            stage1_evals: list[dict] | None = None) -> tuple[dict[int, dict], set[int]]:
+                            stage1_evals: list[dict] | None = None,
+                            texts_out: dict[int, str] | None = None) -> tuple[dict[int, dict], set[int]]:
     """Етап 2: повний текст кожної вакансії, що пройшла картку, і
     вирішальна оцінка за ним. Повертає ({індекс: evaluation}, множина
     індексів, для яких повний текст справді отримано). stage1_evals —
     оцінки етапу 1 у тому самому порядку (тут не використовуються; потрібні
-    тестам, які підміняють етап 2 «прозорим» без мережі)."""
+    тестам, які підміняють етап 2 «прозорим» без мережі). texts_out, якщо
+    передано, заповнюється {індекс: повний текст} — для категорії «інвалідність»."""
     full_texts: dict[int, str] = {}
     for i, job in enumerate(jobs):
         text = fetch_full_text(job)
         if text:
             full_texts[i] = text
+    if texts_out is not None:
+        texts_out.update(full_texts)
     logger.info("Етап 2: повний текст отримано для %d з %d вакансій", len(full_texts), len(jobs))
     if not jobs:
         return {}, set()
@@ -576,12 +603,16 @@ def run_step1(utc_today: date | None = None, local_today: date | None = None) ->
         if i not in ranked:
             eval_by_index[i] = {"passes_criteria": False, "reject_code": "інше",
                                 "reject_reason": "Low на етапі 1 (картка)"}
+    stage2_texts: dict[int, str] = {}
     stage2_evals, full_text_ok = _confirm_with_full_text(
         [jobs_to_evaluate[i] for i in stage1_passed], local_today,
-        [eval_by_index[i] for i in stage1_passed],
+        [eval_by_index[i] for i in stage1_passed], texts_out=stage2_texts,
     )
     full_text_indices: set[int] = set()
+    full_text_by_index: dict[int, str] = {}
     for k, i in enumerate(stage1_passed):
+        if k in stage2_texts:
+            full_text_by_index[i] = stage2_texts[k]
         ev2 = stage2_evals.get(k)
         if ev2 is None:
             ev2 = {**_eval_failed_marker(), "detail": "етап 2 без оцінки"}
@@ -606,11 +637,13 @@ def run_step1(utc_today: date | None = None, local_today: date | None = None) ->
     near_candidates: list[tuple[RawJobPosting, NearMissVacancy, str]] = []
     for i, job in enumerate(jobs_to_evaluate):
         ev = eval_by_index.get(i)
+        category = _category(job, ev, full_text_by_index.get(i))
+        _d = partial(_decision, category=category)
         if not ev:
             # Модель пропустила вакансію — це збій оцінки, а не відсів:
             # не маскуємо його під «відсіяно», рахуємо як не оцінену.
             unevaluated_count += 1
-            decisions.append(_decision(job, EVAL_FAILED_RESULT, "помилка_Claude", "модель не повернула оцінку", date_source=_date_source(job, None)))
+            decisions.append(_d(job, EVAL_FAILED_RESULT, "помилка_Claude", "модель не повернула оцінку", date_source=_date_source(job, None)))
             continue
         if ev.get("eval_failed"):
             if ev.get("kind") == "budget":
@@ -619,7 +652,7 @@ def run_step1(utc_today: date | None = None, local_today: date | None = None) ->
                 stage2_capped_count += 1
             else:
                 unevaluated_count += 1
-            decisions.append(_decision(
+            decisions.append(_d(
                 job, ev["result"], ev["code"], ev.get("detail") or "етап 1", date_source=_date_source(job, None),
             ))
             continue
@@ -631,10 +664,10 @@ def run_step1(utc_today: date | None = None, local_today: date | None = None) ->
                 near_candidates.append((job, NearMissVacancy(
                     title=ev.get("normalized_title") or job.title, company=ev.get("normalized_company") or job.company,
                     source=job.source, url=job.url or "", unmet=ev.get("near_miss_reason") or reason,
-                    code=code, posted_date=ev.get("posted_date"),
+                    code=code, posted_date=ev.get("posted_date"), category=category,
                 ), dsrc))
                 continue
-            decisions.append(_decision(job, "відсіяно", code, reason, ev.get("posted_date"), dsrc))
+            decisions.append(_d(job, "відсіяно", code, reason, ev.get("posted_date"), dsrc))
             continue
 
         posted_date = ev.get("posted_date")
@@ -646,7 +679,7 @@ def run_step1(utc_today: date | None = None, local_today: date | None = None) ->
                 date_undetermined = True
                 parsed = None
             if parsed and parsed not in (local_today, local_yesterday):
-                decisions.append(_decision(job, "відсіяно", "дата", "поза вікном сьогодні/вчора", posted_date, _date_source(job, ev, i in full_text_indices)))
+                decisions.append(_d(job, "відсіяно", "дата", "поза вікном сьогодні/вчора", posted_date, _date_source(job, ev, i in full_text_indices)))
                 continue  # поза вікном "останні 2 дні" (місцевий час кандидата) — не показуємо
 
         card_only = i not in full_text_indices
@@ -667,16 +700,17 @@ def run_step1(utc_today: date | None = None, local_today: date | None = None) ->
             date_undetermined=date_undetermined,
             card_only=card_only,
             flags=[f for f in (ev.get("flags") or []) if isinstance(f, str) and f.strip()],
+            disability=detect_disability(full_text_by_index.get(i) or _card_text(job)),
         )
         dsrc = _date_source(job, ev, i in full_text_indices)
 
         # Обидва рівні — паралельно й незалежно (кожен, що доступний).
         if log_text is not None and _is_duplicate_in_log(vacancy, log_entries):
-            decisions.append(_decision(job, "відсіяно", "дубль", "після оцінки", posted_date, dsrc))
+            decisions.append(_d(job, "відсіяно", "дубль", "після оцінки", posted_date, dsrc))
             continue
         verdict, status = _tracker_check(vacancy, tracker_rows) if tracker_rows is not None else ("", "")
         if verdict == "дубль":
-            decisions.append(_decision(job, "відсіяно", "подано", "таблиця відгуків", posted_date, dsrc))
+            decisions.append(_d(job, "відсіяно", "подано", "таблиця відгуків", posted_date, dsrc))
             continue
         if verdict == "прапорець":
             vacancy.company_flag = f"Компанія вже в таблиці: {status or 'без статусу'}"
@@ -688,7 +722,7 @@ def run_step1(utc_today: date | None = None, local_today: date | None = None) ->
                 near_candidates.append((job, NearMissVacancy(
                     title=vacancy.title, company=vacancy.company, source=job.source, url=job.url or "",
                     unmet=f"репост вакансії, показаної {shown} (менше {REPOST_DUP_DAYS} днів тому)",
-                    code="дубль", posted_date=posted_date,
+                    code="дубль", posted_date=posted_date, category=category,
                 ), dsrc))
                 continue
             vacancy.flags.append(f"репост вакансії, показаної {shown}")
@@ -699,12 +733,12 @@ def run_step1(utc_today: date | None = None, local_today: date | None = None) ->
         if date_undetermined:
             if unknown_date_shown >= UNKNOWN_DATE_FALLBACK_LIMIT:
                 unknown_date_limit_hit = True
-                decisions.append(_decision(job, "відсіяно", "ліміт_невизначеної_дати", "", None, "невідома"))
+                decisions.append(_d(job, "відсіяно", "ліміт_невизначеної_дати", "", None, "невідома"))
                 continue  # дата невідома, і ліміт показу таких вакансій за цей запуск вичерпано
             unknown_date_shown += 1
 
         scored.append(vacancy)
-        decisions.append(_decision(
+        decisions.append(_d(
             job, "показано", "—",
             f"{vacancy.match_level} · {'лише картка' if card_only else 'сторінка'}",
             posted_date, "невідома" if date_undetermined else dsrc,
@@ -718,7 +752,7 @@ def run_step1(utc_today: date | None = None, local_today: date | None = None) ->
     near_misses = [nm for _, nm, _ in near_candidates[:NEAR_MISS_LIMIT]]
     for k, (job, nm, dsrc) in enumerate(near_candidates):
         result = "майже" if k < NEAR_MISS_LIMIT else "відсіяно"
-        decisions.append(_decision(job, result, nm.code, nm.unmet, nm.posted_date, dsrc))
+        decisions.append(_decision(job, result, nm.code, nm.unmet, nm.posted_date, dsrc, nm.category))
 
     # Оновлення лога (тільки якщо Рівень 1 фактично читався — інакше
     # перезаписувати лог тим, чого не читали, ризиковано: могли б стерти

@@ -29,7 +29,7 @@ def _transparent_stage2(monkeypatch):
     (tests/test_step1_fulltext.py) знімають цю підміну явно."""
     from pipeline import step1_vacancies
 
-    def _passthrough(jobs, today, stage1_evals=None):
+    def _passthrough(jobs, today, stage1_evals=None, texts_out=None):
         return {k: ev for k, ev in enumerate(stage1_evals or [])}, set()
 
     monkeypatch.setattr(step1_vacancies, "_confirm_with_full_text", _passthrough)
