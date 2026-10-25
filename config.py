@@ -233,6 +233,18 @@ REPOST_DUP_DAYS = 7
 # м'яким критерієм; ЗП у діапазоні NEAR_MISS_MIN_SALARY_UAH..MIN_SALARY_UAH.
 NEAR_MISS_LIMIT = 5
 NEAR_MISS_MIN_SALARY_UAH = 25_000
+# Категорії «ветеран» / «інвалідність» (25.10.2026) — ЛИШЕ спосіб показу: вакансія
+# з категорією проходить ті самі фільтри, що й решта, але виводиться окремим
+# блоком CATEGORY_BLOCK_TITLE. «Ветеран» визначає модель (veteran_bonus у
+# промпті), «інвалідність» — код за ключовими словами нижче (без урахування
+# регістру, збіг за підрядком) по повному тексту вакансії; без нього — по картці.
+DISABILITY_KEYWORDS = (
+    "особи з інвалідністю", "люди з інвалідністю", "з інвалідністю", "ЛОВЗ",
+    "інклюзивн", "inclusive hiring", "persons with disabilities",
+    "people with disabilities", "disability",
+)
+CATEGORY_NONE = "—"
+CATEGORY_BLOCK_TITLE = "Для ветеранів та осіб з інвалідністю"
 # Виняток зі стопу за назвою: «Junior/Middle», «junior or middle», «Strong Junior».
 JUNIOR_IN_TITLE_PATTERN = r"\b(junior|джуніор|джун|strong\s+junior)\b"
 

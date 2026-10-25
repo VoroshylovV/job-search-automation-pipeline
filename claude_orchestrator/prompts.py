@@ -19,6 +19,7 @@ from datetime import date
 from config import (
     CANDIDATE,
     DATE_WINDOW_DAYS,
+    DISABILITY_KEYWORDS,
     EMAIL_STATUS_OPTIONS,
     MAX_ENGLISH_LEVEL,
     MAX_EXPERIENCE_YEARS,
@@ -104,6 +105,14 @@ A=0 АБО B=0. Кап вище (верхня межа досвіду > {MAX_EXP
 ветеранські програми, бронювання від мобілізації, або явно цінує \
 military/ветеранський бекграунд.
 
+Категорії «ветеран» і «інвалідність» — ЛИШЕ спосіб показу (окремий блок у \
+звіті): вони НЕ впливають на passes_criteria, reject_code, match_level і \
+match_scores — усі критерії діють на такі вакансії так само, як на решту. \
+«Ветеран» = veteran_bonus=true (за повною сторінкою; якщо її немає — за \
+карткою). «Інвалідність» визначає код за ключовими словами (без урахування \
+регістру): {", ".join(DISABILITY_KEYWORDS)} — окремого поля для неї \
+повертати не треба.
+
 Військова служба: вакансії у військових частинах/формуваннях (ЗСУ, \
 Національна гвардія/НГУ, ДПСУ, інші силові структури) та вакансії, що самі \
 по собі передбачають військову службу або військовий контракт — passes_criteria=\
@@ -184,8 +193,8 @@ VACANCY_STAGE_CARD = """ЕТАП 1 з 2 — картка зі списку ви�
 не змінюються — лише обсяг відповіді, бо вирішальна оцінка все одно на етапі 2):
 - Завжди: raw_index, passes_criteria; posted_date — лише якщо дата видна в картці.
 - passes_criteria=false: reject_code, reject_reason (до 60 символів); якщо \
-near_miss=true — ще near_miss і near_miss_reason (до 60 символів). Інших полів \
-НЕ додавай.
+near_miss=true — ще near_miss, near_miss_reason (до 60 символів) і veteran_bonus. \
+Інших полів НЕ додавай.
 - passes_criteria=true: match_level і match_scores. Інших полів (match_reasoning, \
 normalized_*, flags, veteran_bonus, low_match_location тощо) НЕ додавай — їх \
 заповнить етап 2."""

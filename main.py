@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 from claude_orchestrator.cost import tracker as cost_tracker
-from config import CANDIDATE_LOCAL_TZ, COMPARISON_SHEET_TITLE
+from config import CANDIDATE_LOCAL_TZ, CATEGORY_BLOCK_TITLE, CATEGORY_NONE, COMPARISON_SHEET_TITLE
 from google_services import notify
 from pipeline.step1_2_freelance import run_step1_2
 from pipeline.step1_vacancies import run_step1
@@ -77,6 +77,28 @@ def _format_freelance_project(v) -> list[str]:
     return lines
 
 
+def _format_vacancy(v, with_category: bool = False) -> list[str]:
+    lines = [f"- **{v.title}** | {v.company} | [{v.source}]({v.url or 'н/д'})"]
+    lines.append(f"  - Match-рівень: {v.match_level}")
+    # Позначки — у «Оцінка відповідності», як в онлайн-промпті (Крок 1 п.2, Правило И).
+    marks = list(v.flags) + (["лише картка"] if v.card_only else [])
+    reasoning = v.match_reasoning + (f" [{'; '.join(marks)}]" if marks else "")
+    lines.append(f"  - Оцінка відповідності: {reasoning}")
+    lines.append(f"  - Ветерани: {'так' if v.veteran_bonus else 'ні'}")
+    lines.append(f"  - Інвалідність: {'так' if v.disability else 'ні'}")
+    if with_category:
+        lines.append(f"  - Категорія: {v.category}")
+    loc = "так" if v.low_match_location else "ні"
+    if v.low_match_location:
+        loc += f" ({v.low_match_location_reason})"
+    lines.append(f"  - Обмеження локації: {loc}")
+    if v.company_flag:
+        lines.append(f"  - Прапорець: {v.company_flag}")
+    date_str = "невизначена" if v.date_undetermined else (v.posted_date or "невизначена")
+    lines.append(f"  - Дата публікації: {date_str}\n")
+    return lines
+
+
 def format_report(
     step1_result: dict,
     step1_2_result: dict,
@@ -89,25 +111,20 @@ def format_report(
     vacancies = step1_result["vacancies"]
 
     lines.append("## Крок 1 — нові вакансії\n")
-    if not vacancies:
+    # Категорія ≠ «—» (ветеран / інвалідність) — окремий блок після основного
+    # списку; фільтри для таких вакансій ті самі (змінюється лише вивід).
+    main_list = [v for v in vacancies if v.category == CATEGORY_NONE]
+    category_list = [v for v in vacancies if v.category != CATEGORY_NONE]
+    if not main_list:
         lines.append("Нових відповідних вакансій не знайдено.\n")
     else:
-        for v in vacancies:
-            lines.append(f"- **{v.title}** | {v.company} | [{v.source}]({v.url or 'н/д'})")
-            lines.append(f"  - Match-рівень: {v.match_level}")
-            # Позначки — у «Оцінка відповідності», як в онлайн-промпті (Крок 1 п.2, Правило И).
-            marks = list(v.flags) + (["лише картка"] if v.card_only else [])
-            reasoning = v.match_reasoning + (f" [{'; '.join(marks)}]" if marks else "")
-            lines.append(f"  - Оцінка відповідності: {reasoning}")
-            lines.append(f"  - Ветеранські бонуси: {'так' if v.veteran_bonus else 'ні'}")
-            loc = "так" if v.low_match_location else "ні"
-            if v.low_match_location:
-                loc += f" ({v.low_match_location_reason})"
-            lines.append(f"  - Обмеження локації: {loc}")
-            if v.company_flag:
-                lines.append(f"  - Прапорець: {v.company_flag}")
-            date_str = "невизначена" if v.date_undetermined else (v.posted_date or "невизначена")
-            lines.append(f"  - Дата публікації: {date_str}\n")
+        for v in main_list:
+            lines.extend(_format_vacancy(v))
+
+    lines.append(f"**{CATEGORY_BLOCK_TITLE}**" if category_list else f"{CATEGORY_BLOCK_TITLE}: немає")
+    for v in category_list:  # вже відсортовано High → Medium → Low
+        lines.extend(_format_vacancy(v, with_category=True))
+    lines.append("")
 
     # Блок «Майже підійшли» — щодня, одразу після основного списку (Правило И п.7).
     near = step1_result.get("near_misses") or []
