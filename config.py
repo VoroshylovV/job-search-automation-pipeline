@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from dotenv import load_dotenv
 
@@ -270,6 +271,24 @@ SENIORITY_STOP_PATTERN = (
     r"\b(senior|middle|lead|head|principal|staff|director|chief|"
     r"сеньйор|мідл|керівник|начальник|провідний|старший)\b|\bsr\.?\b|\bteam\s*lead"
 )
+
+# --------------------------------------------------------------------------
+# Тривога, локальні логи, розклад (26.10.2026)
+# --------------------------------------------------------------------------
+# Локальні логи: logs/YYYY-MM-DD.csv (повтор того ж дня — «YYYY-MM-DD (повтор N).csv»)
+# пишуться ПЕРШИМИ, потім вивантажуються в Drive; logs/source_counts.csv — історія
+# кількості карток по джерелах (база для тривоги «0 карток там, де зазвичай десятки»).
+LOGS_DIR = str(Path(__file__).resolve().parent / "logs")
+ALARM_BASELINE_RUNS = 7            # скільки останніх запусків джерела беремо в базу
+ALARM_BASELINE_MIN_RUNS = 3        # менше записів — бази немає, тривоги за нулем нема
+ALARM_ZERO_CARDS_BASELINE_MIN = 10  # «зазвичай десятки»: медіана бази ≥ цього при 0 карток = тривога
+SELFCHECK_RUN_STARTED_MARK = "ЗАПУСК ПОЧАТО"
+EXIT_CODE_ALARM = 2                # ненульовий exit code при тривозі (аварія без виключення = 1)
+# Розклад — за часом Europe/Warsaw (CANDIDATE_LOCAL_TZ), а не UTC і не поясом ПК:
+# Task Scheduler будить `main.py --scheduled` кожні 15 хв, а запуск відбувається, лише
+# коли у Варшаві вже ≥ SCHEDULE_RUN_AT_LOCAL і сьогодні (за Варшавою) ще не стартував.
+SCHEDULE_RUN_AT_LOCAL = "12:00"
+SCHEDULE_STATE_FILE = "last_scheduled_run.txt"  # у LOGS_DIR
 
 SOURCES = ("djinni.co", "jobs.dou.ua", "robota.ua", "work.ua", "happymonday.ua")
 

@@ -21,12 +21,14 @@ from claude_orchestrator.cost import STAGES, STAGE_TITLES, tracker as cost_track
 from config import (
     MAX_RUN_COST_USD,
     LOW_MATCH_STREAK_HEURISTIC_RUNS,
+    SELFCHECK_RUN_STARTED_MARK,
     RESUME_FOLDER_ID,
     SELFCHECK_SHEET_TITLE,
     SELFCHECK_TREND_LOOKBACK_ROWS,
 )
 from google_services import drive, sheets
 from models import SELFCHECK_HEADER, SelfCheckResult
+from pipeline import alarm, local_log
 
 logger = logging.getLogger(__name__)
 
@@ -186,12 +188,32 @@ def _low_match_streak(
     idx = SELFCHECK_HEADER.index("Лише Low/нуль при 5/5")
     streak = 1  # поточний запуск уже "так"
     for row in reversed(rows):  # від найновішого історичного рядка назад
+        if row and row[0].strip().endswith(SELFCHECK_RUN_STARTED_MARK):
+            continue  # мітка «ЗАПУСК ПОЧАТО» (поточний або перерваний запуск) — не результат
         value = row[idx] if idx < len(row) else ""
         if value.strip() == "так":
             streak += 1
         else:
             break
     return streak >= LOW_MATCH_STREAK_HEURISTIC_RUNS
+
+
+def mark_run_started(timestamp_utc: str) -> dict:
+    """На початку запуску: рядок «<час> — ЗАПУСК ПОЧАТО» у «Результат щоденної перевірки»;
+    наприкінці run_step4 оновлює його на місці. Збій запису = тривога. Повертає
+    {"sheet_id", "row"} (порожньо, якщо не вдалось)."""
+    try:
+        def _write() -> dict:
+            sheet_id = _get_or_create_selfcheck_sheet()
+            sheets.ensure_header(sheet_id, header=SELFCHECK_HEADER)
+            row = sheets.append_row(sheet_id, [f"{timestamp_utc} — {SELFCHECK_RUN_STARTED_MARK}"])
+            return {"sheet_id": sheet_id, "row": row}
+
+        return local_log.retry_once(_write, "Мітка початку запуску в Drive")
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Не вдалось записати мітку початку запуску")
+        alarm.add(f"мітку «{SELFCHECK_RUN_STARTED_MARK}» не записано в Drive: {exc}")
+        return {}
 
 
 def shadow_summary(step1_result: dict) -> str:
@@ -216,6 +238,7 @@ def run_step4(
     timestamp_utc: str,
     step1_2_result: dict | None = None,
     step3_tracker_result: dict | None = None,
+    start_marker: dict | None = None,
 ) -> dict:
     step1_status, step1_note = _step1_status(step1_result)
     step2_status, step2_note = _step2_status(step2_result)
@@ -281,15 +304,24 @@ def run_step4(
 
     saved = False
     save_error = ""
-    try:
+    marker = start_marker or {}
+
+    def _persist() -> None:
         sheet_id = _get_or_create_selfcheck_sheet()
         sheets.ensure_header(sheet_id, header=SELFCHECK_HEADER)
         result.low_match_streak_signal = _low_match_streak(sheet_id, only_low_or_zero)
-        sheets.append_row(sheet_id, result.as_row())
+        if marker.get("row") and marker.get("sheet_id") == sheet_id:
+            sheets.update_row(sheet_id, marker["row"], result.as_row())  # оновлюємо мітку «ЗАПУСК ПОЧАТО»
+        else:
+            sheets.append_row(sheet_id, result.as_row())
+
+    try:
+        local_log.retry_once(_persist, "Запис результату перевірки в Drive")
         saved = True
     except Exception as exc:  # noqa: BLE001
         logger.exception("Не вдалось зберегти результат Кроку 4")
         save_error = str(exc)
+        local_log.save_row_fallback("selfcheck", result.as_row(), save_error)
 
     return {"result": result, "saved": saved, "error": save_error}
 

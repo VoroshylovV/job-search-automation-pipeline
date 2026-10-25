@@ -62,6 +62,7 @@ from config import (
     UNKNOWN_DATE_FALLBACK_LIMIT,
 )
 from google_services import docs, drive, sheets
+from pipeline import local_log
 from models import NearMissVacancy, RawJobPosting, ScoredVacancy, SourceStatus, category_label
 from scrapers import SCRAPER_MODULES
 from scrapers.base import ScraperError, age_days, coverage_status
@@ -297,18 +298,24 @@ def _scrape_all(today: date) -> tuple[list[RawJobPosting], dict[str, SourceStatu
                 status, method = coverage_status(coverages)
             else:
                 status, method = "OK", getattr(module, "COLLECTION_METHOD", "не_встановлено")
-            statuses[source_name] = SourceStatus(source=source_name, status=status)
+            # Кількість карток — у локальний лог ОДРАЗУ (по ходу роботи) і перевірка на
+            # аномалію «0 там, де зазвичай десятки» (база — попередні запуски).
+            anomaly = local_log.zero_cards_anomaly(source_name, len(jobs))
+            local_log.record_source_count(today, source_name, len(jobs), status)
+            statuses[source_name] = SourceStatus(source=source_name, status=status, count=len(jobs), anomaly=anomaly)
             collection_methods[source_name] = method
             logger.info("%s: зібрано %d кандидатів", source_name, len(jobs))
         except ScraperError as exc:
+            local_log.record_source_count(today, source_name, 0, "недоступне")
             statuses[source_name] = SourceStatus(
-                source=source_name, status="недоступне", note=str(exc)
+                source=source_name, status="недоступне", note=str(exc), count=0
             )
             collection_methods[source_name] = "не_встановлено"
             logger.warning("%s недоступне: %s", source_name, exc)
         except Exception as exc:  # noqa: BLE001 - збій парсингу одного джерела не має губити решту
+            local_log.record_source_count(today, source_name, 0, "недоступне")
             statuses[source_name] = SourceStatus(
-                source=source_name, status="недоступне", note=f"непередбачена помилка: {type(exc).__name__}: {exc}"
+                source=source_name, status="недоступне", note=f"непередбачена помилка: {type(exc).__name__}: {exc}", count=0
             )
             collection_methods[source_name] = "не_встановлено"
             logger.exception("%s: непередбачена помилка скрапера", source_name)

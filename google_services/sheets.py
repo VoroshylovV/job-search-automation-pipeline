@@ -47,15 +47,33 @@ def ensure_header(spreadsheet_id: str, header: list[str] = METRICS_HEADER) -> No
     ).execute()
 
 
-def append_row(spreadsheet_id: str, row: list) -> None:
+def append_row(spreadsheet_id: str, row: list) -> int | None:
+    """Додає рядок; повертає номер доданого рядка (1-based) або None, якщо API не повернув діапазон."""
     guard_not_forbidden(spreadsheet_id)
     service = sheets_service()
-    service.spreadsheets().values().append(
+    resp = service.spreadsheets().values().append(
         spreadsheetId=spreadsheet_id,
         range=DEFAULT_RANGE,
         valueInputOption="USER_ENTERED",
         insertDataOption="INSERT_ROWS",
         body={"values": [row]},
+    ).execute()
+    return _row_from_updated_range(((resp or {}).get("updates") or {}).get("updatedRange", ""))
+
+
+def _row_from_updated_range(updated_range: str) -> int | None:
+    """«Лист1!A12:M12» -> 12."""
+    import re
+    m = re.search(r"![A-Z]+(\d+)", updated_range or "")
+    return int(m.group(1)) if m else None
+
+
+def update_row(spreadsheet_id: str, row_number: int, row: list) -> None:
+    """Перезаписує рядок row_number (1-based) на місці."""
+    guard_not_forbidden(spreadsheet_id)
+    sheets_service().spreadsheets().values().update(
+        spreadsheetId=spreadsheet_id, range=f"A{row_number}:{_col_letter(len(row))}{row_number}",
+        valueInputOption="USER_ENTERED", body={"values": [row]},
     ).execute()
 
 

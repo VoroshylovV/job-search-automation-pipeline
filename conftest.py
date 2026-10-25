@@ -43,3 +43,12 @@ def _no_shadow_by_default(monkeypatch):
     from pipeline import step1_vacancies
 
     monkeypatch.setattr(step1_vacancies, "CLAUDE_MODEL_CARDS_SHADOW", "")
+
+
+@pytest.fixture(autouse=True)
+def _isolated_local_logs(monkeypatch, tmp_path):
+    """Локальні логи (logs/…) у тестах — у тимчасову папку, без пауз між повторними спробами."""
+    from pipeline import local_log
+
+    monkeypatch.setattr(local_log, "LOGS_DIR", str(tmp_path / "logs"))
+    monkeypatch.setattr(local_log, "RETRY_SLEEP_SEC", 0)

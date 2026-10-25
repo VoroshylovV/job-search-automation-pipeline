@@ -19,8 +19,9 @@ from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 
 from claude_orchestrator.cost import tracker as cost_tracker
-from config import CANDIDATE_LOCAL_TZ, CATEGORY_BLOCK_TITLE, CATEGORY_NONE, COMPARISON_SHEET_TITLE
+from config import CANDIDATE_LOCAL_TZ, CATEGORY_BLOCK_TITLE, CATEGORY_NONE, COMPARISON_SHEET_TITLE, EXIT_CODE_ALARM
 from google_services import notify
+from pipeline import alarm, schedule_gate
 from pipeline.step1_2_freelance import run_step1_2
 from pipeline.step1_vacancies import run_step1
 from pipeline.cost_log import append_cost_row, build_row
@@ -28,7 +29,7 @@ from pipeline.reject_log import write_reject_log
 from pipeline.step2_mail import run_step2
 from pipeline.step3_metrics import run_step3
 from pipeline.step3_tracker import run_step3_tracker
-from pipeline.step4_selfcheck import format_selfcheck_block, run_step4
+from pipeline.step4_selfcheck import format_selfcheck_block, mark_run_started, run_step4
 from pipeline.step5_comparison import format_comparison_block, run_step5
 
 # Windows: при перенаправленні stdout у файл (Task Scheduler -> logs/scheduler.log)
@@ -106,8 +107,12 @@ def format_report(
     step3_result: dict,
     step4_result: dict,
     step5_result: dict | None = None,
+    alarms: list[str] | None = None,
 ) -> str:
     lines: list[str] = []
+    if alarms:  # ПЕРШІ рядки звіту (консоль, reports/); те саме — на початку push
+        lines.append(alarm.format_block(alarms))
+        lines.append("")
     vacancies = step1_result["vacancies"]
 
     lines.append("## Крок 1 — нові вакансії\n")
@@ -213,7 +218,29 @@ def format_report(
     return "\n".join(lines)
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
+    """Код виходу: 0 — штатно; EXIT_CODE_ALARM (2) — була тривога; 1 — аварія поза кроками."""
+    argv = sys.argv[1:] if argv is None else argv
+    scheduled = "--scheduled" in argv
+    if scheduled:
+        due, why = schedule_gate.is_due()
+        if not due:
+            logger.info("Запланований запуск пропущено: %s", why)
+            return 0
+        schedule_gate.mark_started()
+        logger.info("Запланований запуск: %s", why)
+    alarm.reset()
+    try:
+        return _run()
+    except Exception as exc:  # noqa: BLE001 - аварія поза окремими кроками
+        logger.exception("Аварія пайплайна")
+        alarm.add(f"аварія пайплайна: {type(exc).__name__}: {exc}")
+        print(alarm.format_block())
+        notify.send_push(notify.build_message(alarm.format_block()), urgent=True)
+        return 1
+
+
+def _run() -> int:
     # Два навмисно різні "сьогодні" — див. config.py, розділ "Часові пояси",
     # і докладний коментар на початку pipeline/step1_vacancies.py.
     utc_now = datetime.now(timezone.utc)
@@ -226,10 +253,15 @@ def main() -> int:
     cost_tracker.reset()  # вартість Claude рахується окремо за кожен запуск
     logger.info("=== Запуск пайплайна: %s (UTC) / %s (%s) ===", utc_today.isoformat(), local_today.isoformat(), CANDIDATE_LOCAL_TZ)
 
+    # Мітка початку: рядок «ЗАПУСК ПОЧАТО» у «Результат щоденної перевірки»; Крок 4 оновить його
+    # наприкінці. Якщо запуск обірветься — мітка лишиться як свідчення.
+    start_marker = mark_run_started(selfcheck_timestamp)
+
     try:
         step1_result = run_step1(utc_today=utc_today, local_today=local_today)
-    except Exception:
+    except Exception as exc:  # noqa: BLE001
         logger.exception("Крок 1 критично провалився")
+        alarm.add(f"крок 1 критично провалився: {type(exc).__name__}: {exc}")
         step1_result = {
             "vacancies": [],
             "total_found_before_filters": 0,
@@ -240,12 +272,18 @@ def main() -> int:
             "dedup_level_used": 0,
         }
 
-    # Діагностичний лог причин відсіву (порівняння з онлайн-версією).
-    # Збій не впливає на решту запуску.
+    # Діагностичний лог причин відсіву (порівняння з онлайн-версією): локальний файл ->
+    # Drive (+1 повтор) -> перевірка кількості рядків. Збій не валить решту запуску, але = тривога.
     try:
-        write_reject_log(step1_result.get("decisions", []), utc_today)
+        rl = write_reject_log(step1_result.get("decisions", []), utc_today)
+        if not rl["verified"]:
+            alarm.add(f"лог відсіву не вивантажено в Drive або кількість рядків не збіглась ({rl['error']}); "
+                      f"локальна копія: {rl['local_path']}")
+            note = step1_result.get("dedup_log_note") or ""
+            step1_result["dedup_log_note"] = (note + "; " if note else "") + f"лог причин відсіву не підтверджено в Drive: {rl['error']}"
     except Exception as exc:  # noqa: BLE001
         logger.exception("Лог причин відсіву не записано")
+        alarm.add(f"лог відсіву не записано: {type(exc).__name__}: {exc}")
         note = step1_result.get("dedup_log_note") or ""
         step1_result["dedup_log_note"] = (note + "; " if note else "") + f"лог причин відсіву не записано: {exc}"
 
@@ -254,8 +292,9 @@ def main() -> int:
     # попереднього", що й для Кроку 2 нижче.
     try:
         step1_2_result = run_step1_2(utc_today=utc_today, local_today=local_today)
-    except Exception:
+    except Exception as exc:  # noqa: BLE001
         logger.exception("Крок 1.2 критично провалився")
+        alarm.add(f"крок 1.2 критично провалився: {type(exc).__name__}: {exc}")
         step1_2_result = {
             "projects": [],
             "source_statuses": {},
@@ -272,14 +311,16 @@ def main() -> int:
     # не залежність від успіху блоків вище.
     try:
         step2_result = run_step2()
-    except Exception:
+    except Exception as exc:  # noqa: BLE001
         logger.exception("Крок 2 критично провалився")
+        alarm.add(f"крок 2 критично провалився: {type(exc).__name__}: {exc}")
         step2_result = {"findings": [], "total_emails_found": 0, "hr_domain_emails": 0, "known_company_emails": 0,
                         "error": "Крок 2 критично провалився, див. лог помилок"}
 
     # Крок 3/4 + звіт у try/finally: push-повідомлення (нижче) має піти
     # БЕЗУМОВНО, навіть якщо щось у Кроці 3/4/формуванні звіту несподівано
     # впаде — той самий принцип "сповіщення завжди", що й у чат-версії.
+    report_printed = False
     try:
         step3_result = run_step3(step1_result, step2_result, utc_today=utc_today)
         # Крок 3 (таблиця відгуків) — власний try: збій запису в ручну
@@ -296,7 +337,11 @@ def main() -> int:
             timestamp_utc=selfcheck_timestamp,
             step1_2_result=step1_2_result,
             step3_tracker_result=step3_tracker_result,
+            start_marker=start_marker,
         )
+        # Тривоги з результатів кроків (джерела, Claude, запис у Drive) — ДО формування звіту,
+        # щоб потрапити в його перші рядки.
+        alarm.collect_from_results(step1_result, step1_2_result, step2_result, step3_result, step4_result)
 
         # Крок 5 — порівняння з автоматичним (чат) запуском того самого дня.
         # Сам себе відключає (result["active"] == False), якщо
@@ -318,22 +363,30 @@ def main() -> int:
             logger.exception("Запис у logs/costs.csv не вдався")
 
         report = format_report(
-            step1_result, step1_2_result, step2_result, step3_result, step4_result, step5_result
+            step1_result, step1_2_result, step2_result, step3_result, step4_result, step5_result,
+            alarms=alarm.reasons(),
         )
         print(report)
+        report_printed = True
 
         with open(f"reports/report_{utc_today.isoformat()}.md", "w", encoding="utf-8") as f:
             f.write(report)
-    except Exception:
+    except Exception as exc:  # noqa: BLE001
         logger.exception("Крок 3/4 або формування звіту критично провалились")
+        alarm.add(f"крок 3/4 або формування звіту критично провалились: {type(exc).__name__}: {exc}")
     finally:
         # Наприкінці — push-повідомлення, БЕЗУМОВНО (навіть якщо щось вище
         # провалилось): Володимир хоче знати, коли звіт готовий для
         # перегляду, незалежно від того, чи є в ньому щось "цікаве".
+        # Тривога — на початку повідомлення (і в консолі, якщо звіт не надруковано).
         logger.info("Вартість Claude за запуск: $%.4f (%d викликів)", cost_tracker.total_usd, cost_tracker.calls)
-        notify.send_push()
+        if alarm.active() and not report_printed:
+            print(alarm.format_block())
+        sent = notify.send_push(notify.build_message(alarm.format_block()), urgent=alarm.active())
+        if alarm.active() and not sent:
+            logger.error("Push із тривогою не надіслано — див. консоль/звіт: %s", "; ".join(alarm.reasons()))
 
-    return 0
+    return EXIT_CODE_ALARM if alarm.active() else 0
 
 
 if __name__ == "__main__":
