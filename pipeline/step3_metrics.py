@@ -6,7 +6,7 @@ import logging
 from datetime import date
 
 from claude_orchestrator.cost import tracker as cost_tracker
-from config import CLAUDE_MODEL_CARDS, CLAUDE_MODEL_FULLTEXT, METRICS_SHEET_TITLE, RESUME_FOLDER_ID
+from config import CLAUDE_MODEL_CARDS, CLAUDE_MODEL_CARDS_SHADOW, CLAUDE_MODEL_FULLTEXT, METRICS_SHEET_TITLE, RESUME_FOLDER_ID
 from google_services import drive, sheets
 from models import RunMetrics
 
@@ -41,6 +41,7 @@ def run_step3(
 
     utc_today = utc_today or datetime.now(timezone.utc).date()
     vacancies = step1_result["vacancies"]
+    shadow = step1_result.get("shadow") or {}
 
     metrics = RunMetrics(
         # UTC — узгоджено з логом дублів і результатом Кроку 4 (див.
@@ -63,6 +64,12 @@ def run_step3(
         cost_per_shown_usd=(cost_tracker.total_usd / len(vacancies)) if vacancies else None,
         model_cards=model_label(CLAUDE_MODEL_CARDS),
         model_fulltext=model_label(CLAUDE_MODEL_FULLTEXT),
+        model_cards_shadow=model_label(CLAUDE_MODEL_CARDS_SHADOW) if shadow.get("enabled") else "",
+        shadow_compared=shadow.get("compared", 0),
+        shadow_agree=shadow.get("agree", 0),
+        shadow_disagree=shadow.get("disagree", 0),
+        shadow_sonnet_pass_haiku_reject=shadow.get("sonnet_pass_haiku_reject", 0),
+        shadow_haiku_pass_sonnet_reject=shadow.get("haiku_pass_sonnet_reject", 0),
     )
 
     notes = []

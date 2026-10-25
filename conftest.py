@@ -33,3 +33,13 @@ def _transparent_stage2(monkeypatch):
         return {k: ev for k, ev in enumerate(stage1_evals or [])}, set()
 
     monkeypatch.setattr(step1_vacancies, "_confirm_with_full_text", _passthrough)
+
+
+@pytest.fixture(autouse=True)
+def _no_shadow_by_default(monkeypatch):
+    """Тіньова гілка етапу 1 (Haiku, з 26.10.2026) подвоїла б виклики call_json у
+    тестах логіки Кроку 1, що лічать виклики/промпти. За замовчуванням вона вимкнена;
+    тести тіні (tests/test_shadow_stage1.py) вмикають її явно."""
+    from pipeline import step1_vacancies
+
+    monkeypatch.setattr(step1_vacancies, "CLAUDE_MODEL_CARDS_SHADOW", "")

@@ -97,11 +97,12 @@ def test_metrics_row_has_cost_columns_matching_header():
     m = RunMetrics(run_date="2026-10-11", cost_total_usd=0.31234, cost_per_shown_usd=0.1562)
     row = m.as_row()
     assert len(row) == len(METRICS_HEADER)
-    assert METRICS_HEADER[-4:-2] == ["Вартість Claude, $ разом", "Вартість Claude, $ на показану вакансію"]
-    assert METRICS_HEADER[-2:] == ["Модель крок 1 (картки)", "Модель крок 2 (повні тексти)"]
-    assert row[-4:-2] == [0.3123, 0.1562]
-    assert RunMetrics(run_date="d").as_row()[-3] == "н/д"
-    assert RunMetrics(run_date="d", model_cards="Sonnet 5.5", model_fulltext="Sonnet 5.5").as_row()[-2:] == ["Sonnet 5.5", "Sonnet 5.5"]
+    i = METRICS_HEADER.index("Вартість Claude, $ разом")  # нові колонки (тінь етапу 1, 26.10) — лише після моделей
+    assert METRICS_HEADER[i:i + 4] == ["Вартість Claude, $ разом", "Вартість Claude, $ на показану вакансію",
+                                      "Модель крок 1 (картки)", "Модель крок 2 (повні тексти)"]
+    assert row[i:i + 2] == [0.3123, 0.1562]
+    assert RunMetrics(run_date="d").as_row()[i + 1] == "н/д"
+    assert RunMetrics(run_date="d", model_cards="Sonnet 5.5", model_fulltext="Sonnet 4.5").as_row()[i + 2:i + 4] == ["Sonnet 5.5", "Sonnet 4.5"]
 
 
 def test_model_label():

@@ -39,6 +39,7 @@ from config import (
     BUDGET_RESERVE_LATER_STEPS_USD,
     CLAUDE_EVAL_MAX_TOKENS,
     CLAUDE_MODEL_CARDS,
+    CLAUDE_MODEL_CARDS_SHADOW,
     CLAUDE_MODEL_FULLTEXT,
     DISABILITY_KEYWORDS,
     MAX_FULLTEXT_VACANCIES,
@@ -346,9 +347,12 @@ def _category(job: RawJobPosting, ev: dict | None = None, full_text: str | None 
 
 
 def _decision(job: RawJobPosting, result: str, code: str, detail: str = "",
-              posted_date: str | None = None, date_source: str = "", category: str | None = None) -> dict:
+              posted_date: str | None = None, date_source: str = "", category: str | None = None,
+              verdict_haiku: str = "", verdict_sonnet: str = "") -> dict:
     """Рядок діагностичного логу причин відсіву (див. pipeline/reject_log.py).
-    category: колонка «Категорія» (11-та); без неї — за карткою вакансії."""
+    category: колонка «Категорія» (11-та); без неї — за карткою вакансії.
+    verdict_*: колонки «Вердикт Haiku» / «Вердикт Sonnet» (етап 1; порожньо, якщо
+    картка не доходила до оцінки)."""
     return {
         "source": job.source,
         "url": job.url or "",
@@ -359,6 +363,8 @@ def _decision(job: RawJobPosting, result: str, code: str, detail: str = "",
         "posted_date": posted_date or "",
         "date_source": date_source,
         "category": category if category is not None else _category(job),
+        "verdict_haiku": verdict_haiku,
+        "verdict_sonnet": verdict_sonnet,
     }
 
 
@@ -372,6 +378,8 @@ def _date_source(job: RawJobPosting, ev: dict | None, full_text: bool = False) -
     return "невідома"
 
 
+EMPTY_SHADOW = {"enabled": False, "model_primary": "", "model_shadow": "", "compared": 0, "agree": 0,
+                "disagree": 0, "sonnet_pass_haiku_reject": 0, "haiku_pass_sonnet_reject": 0, "not_compared": 0}
 EVAL_FAILED_RESULT = "не оцінено (помилка Claude)"
 EVAL_BUDGET_RESULT = "не оцінено (ліміт бюджету)"
 EVAL_STAGE2_CAP_RESULT = "не оцінено (ліміт етапу 2)"
@@ -396,7 +404,8 @@ def _budget_limit() -> float:
 
 
 def _evaluate_batch(chunk: list[RawJobPosting], today: date, stage: str,
-                    chunk_texts: dict[int, str]) -> dict[int, dict] | None:
+                    chunk_texts: dict[int, str], model: str | None = None,
+                    cost_stage: str | None = None) -> dict[int, dict] | None:
     """Оцінка одного батча. Обрізана відповідь (max_tokens) — батч ділиться
     навпіл і кожна половина повторюється; помилка Claude → None (вакансії
     батча лишаються неоціненими), ліміт бюджету → маркер «ліміт бюджету»
@@ -404,8 +413,9 @@ def _evaluate_batch(chunk: list[RawJobPosting], today: date, stage: str,
     static, dynamic = build_vacancy_eval_parts(chunk, today=today, stage=stage, full_texts=chunk_texts)
     try:
         response = call_json(
-            dynamic, max_tokens=CLAUDE_EVAL_MAX_TOKENS, cache_prefix=static, stage="fulltext" if stage == "full" else "cards",
-            model=CLAUDE_MODEL_FULLTEXT if stage == "full" else CLAUDE_MODEL_CARDS,
+            dynamic, max_tokens=CLAUDE_EVAL_MAX_TOKENS, cache_prefix=static,
+            stage=cost_stage or ("fulltext" if stage == "full" else "cards"),
+            model=model or (CLAUDE_MODEL_FULLTEXT if stage == "full" else CLAUDE_MODEL_CARDS),
             budget_limit=_budget_limit(),
         )
     except ClaudeBudgetExceededError:
@@ -419,7 +429,7 @@ def _evaluate_batch(chunk: list[RawJobPosting], today: date, stage: str,
         out: dict[int, dict] = {}
         for lo, hi in ((0, mid), (mid, len(chunk))):
             part_texts = {i - lo: t for i, t in chunk_texts.items() if lo <= i < hi}
-            part = _evaluate_batch(chunk[lo:hi], today, stage, part_texts)
+            part = _evaluate_batch(chunk[lo:hi], today, stage, part_texts, model, cost_stage)
             if part is None:
                 out.update({i: _eval_failed_marker() for i in range(lo, hi)})
             else:
@@ -437,7 +447,8 @@ def _evaluate_batch(chunk: list[RawJobPosting], today: date, stage: str,
 
 
 def _evaluate(jobs: list[RawJobPosting], today: date, stage: str,
-              full_texts: dict[int, str] | None = None) -> dict[int, dict]:
+              full_texts: dict[int, str] | None = None, model: str | None = None,
+              cost_stage: str | None = None) -> dict[int, dict]:
     """Оцінка Claude батчами (CLAUDE_EVAL_CHUNK_SIZE для картки,
     CLAUDE_FULL_EVAL_CHUNK_SIZE для повних текстів). Повертає
     {індекс у jobs: evaluation}; для вакансій батча, що не оцінився, —
@@ -448,12 +459,49 @@ def _evaluate(jobs: list[RawJobPosting], today: date, stage: str,
     for start in range(0, len(jobs), chunk_size):
         chunk = jobs[start : start + chunk_size]
         chunk_texts = {i - start: t for i, t in full_texts.items() if start <= i < start + len(chunk)}
-        batch = _evaluate_batch(chunk, today, stage, chunk_texts)
+        batch = _evaluate_batch(chunk, today, stage, chunk_texts, model, cost_stage)
         if batch is None:
             result.update({start + i: _eval_failed_marker() for i in range(len(chunk))})
         else:
             result.update({start + i: ev for i, ev in batch.items()})
     return result
+
+
+def _stage1_verdict(ev: dict | None) -> tuple[bool | None, str]:
+    """Вердикт етапу 1 однієї гілки: (пройшла далі: True/False/None-не оцінено, текст
+    для логу: результат · причина · Match). «Пройшла далі» = passes_criteria і Match
+    не Low — те саме правило, за яким картка йде на етап 2 («Low на етапі 1»)."""
+    if not ev:
+        return None, "не оцінено"
+    if ev.get("eval_failed"):
+        return None, ev.get("result") or EVAL_FAILED_RESULT
+    if not ev.get("passes_criteria"):
+        reason = ev.get("reject_reason") or ""
+        return False, f"відсіяно · {ev.get('reject_code') or 'інше'}" + (f": {reason}" if reason else "")
+    level = _final_match_level(ev, card_only=False)
+    if level == "Low":
+        return False, "відсіяно · Low на етапі 1 (картка) · Match Low"
+    return True, f"пройшла · Match {level}"
+
+
+def _shadow_stats(primary: dict[int, dict], shadow: dict[int, dict], total: int) -> dict:
+    """Збіг/розбіжність вердиктів Sonnet (основна) і Haiku (тінь) по картках, оцінених
+    обома гілками. Лише облік: на відбір не впливає."""
+    stats = {"compared": 0, "agree": 0, "disagree": 0, "sonnet_pass_haiku_reject": 0,
+             "haiku_pass_sonnet_reject": 0, "not_compared": 0}
+    for i in range(total):
+        s_pass, _ = _stage1_verdict(primary.get(i))
+        h_pass, _ = _stage1_verdict(shadow.get(i))
+        if s_pass is None or h_pass is None:
+            stats["not_compared"] += 1
+            continue
+        stats["compared"] += 1
+        if s_pass == h_pass:
+            stats["agree"] += 1
+            continue
+        stats["disagree"] += 1
+        stats["sonnet_pass_haiku_reject" if s_pass else "haiku_pass_sonnet_reject"] += 1
+    return stats
 
 
 def _confirm_with_full_text(jobs: list[RawJobPosting], today: date,
@@ -501,6 +549,7 @@ def run_step1(utc_today: date | None = None, local_today: date | None = None) ->
         "evaluated_count": 0,
         "budget_unevaluated_count": 0,
         "stage2_capped_count": 0,
+        "shadow": {**EMPTY_SHADOW},
     }
     if not raw_jobs:
         return empty_result
@@ -585,6 +634,22 @@ def run_step1(utc_today: date | None = None, local_today: date | None = None) ->
 
     # Етап 1: картка (грубе сито). Етап 2: повний текст — вирішальний.
     eval_by_index = _evaluate(jobs_to_evaluate, local_today, "card")
+    # Тіньова гілка (Haiku, той самий промпт і ті самі картки; з 26.10.2026): вердикти
+    # лише в лог відсіву й метрики. Не змінює eval_by_index, відбір, етап 2 і ліміти
+    # (вартість тіні не входить у budget_usd).
+    primary_card_evals = dict(eval_by_index)
+    shadow_by_index: dict[int, dict] = {}
+    shadow_enabled = bool(CLAUDE_MODEL_CARDS_SHADOW) and bool(jobs_to_evaluate)
+    if shadow_enabled:
+        try:
+            shadow_by_index = _evaluate(jobs_to_evaluate, local_today, "card",
+                                        model=CLAUDE_MODEL_CARDS_SHADOW, cost_stage="cards_shadow")
+        except Exception:  # noqa: BLE001 - тінь не має валити Крок 1
+            logger.exception("Тіньова гілка етапу 1 (%s) не виконалась", CLAUDE_MODEL_CARDS_SHADOW)
+    shadow = {
+        "enabled": shadow_enabled, "model_primary": CLAUDE_MODEL_CARDS, "model_shadow": CLAUDE_MODEL_CARDS_SHADOW,
+        **_shadow_stats(primary_card_evals, shadow_by_index, len(jobs_to_evaluate)),
+    } if shadow_enabled else {**EMPTY_SHADOW, "model_primary": CLAUDE_MODEL_CARDS, "model_shadow": ""}
     # «Оцінено» для журналу вартості: вакансії, що реально отримали оцінку етапу 1.
     evaluated_count = sum(1 for ev in eval_by_index.values() if not ev.get("eval_failed"))
     stage1_ok = [i for i in range(len(jobs_to_evaluate))
@@ -638,7 +703,9 @@ def run_step1(utc_today: date | None = None, local_today: date | None = None) ->
     for i, job in enumerate(jobs_to_evaluate):
         ev = eval_by_index.get(i)
         category = _category(job, ev, full_text_by_index.get(i))
-        _d = partial(_decision, category=category)
+        verdict_sonnet = _stage1_verdict(primary_card_evals.get(i))[1]
+        verdict_haiku = _stage1_verdict(shadow_by_index.get(i))[1] if shadow_enabled else ""
+        _d = partial(_decision, category=category, verdict_haiku=verdict_haiku, verdict_sonnet=verdict_sonnet)
         if not ev:
             # Модель пропустила вакансію — це збій оцінки, а не відсів:
             # не маскуємо його під «відсіяно», рахуємо як не оцінену.
@@ -665,6 +732,7 @@ def run_step1(utc_today: date | None = None, local_today: date | None = None) ->
                     title=ev.get("normalized_title") or job.title, company=ev.get("normalized_company") or job.company,
                     source=job.source, url=job.url or "", unmet=ev.get("near_miss_reason") or reason,
                     code=code, posted_date=ev.get("posted_date"), category=category,
+                    verdict_haiku=verdict_haiku, verdict_sonnet=verdict_sonnet,
                 ), dsrc))
                 continue
             decisions.append(_d(job, "відсіяно", code, reason, ev.get("posted_date"), dsrc))
@@ -723,6 +791,7 @@ def run_step1(utc_today: date | None = None, local_today: date | None = None) ->
                     title=vacancy.title, company=vacancy.company, source=job.source, url=job.url or "",
                     unmet=f"репост вакансії, показаної {shown} (менше {REPOST_DUP_DAYS} днів тому)",
                     code="дубль", posted_date=posted_date, category=category,
+                    verdict_haiku=verdict_haiku, verdict_sonnet=verdict_sonnet,
                 ), dsrc))
                 continue
             vacancy.flags.append(f"репост вакансії, показаної {shown}")
@@ -752,7 +821,8 @@ def run_step1(utc_today: date | None = None, local_today: date | None = None) ->
     near_misses = [nm for _, nm, _ in near_candidates[:NEAR_MISS_LIMIT]]
     for k, (job, nm, dsrc) in enumerate(near_candidates):
         result = "майже" if k < NEAR_MISS_LIMIT else "відсіяно"
-        decisions.append(_decision(job, result, nm.code, nm.unmet, nm.posted_date, dsrc, nm.category))
+        decisions.append(_decision(job, result, nm.code, nm.unmet, nm.posted_date, dsrc, nm.category,
+                                   nm.verdict_haiku, nm.verdict_sonnet))
 
     # Оновлення лога (тільки якщо Рівень 1 фактично читався — інакше
     # перезаписувати лог тим, чого не читали, ризиковано: могли б стерти
@@ -809,4 +879,5 @@ def run_step1(utc_today: date | None = None, local_today: date | None = None) ->
         "evaluated_count": evaluated_count,
         "budget_unevaluated_count": budget_unevaluated_count,
         "stage2_capped_count": stage2_capped_count,
+        "shadow": shadow,
     }

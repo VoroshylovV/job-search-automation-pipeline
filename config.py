@@ -21,12 +21,15 @@ load_dotenv()  # читає .env у робочій директорії, якщ�
 # (див. .env.example). Google credentials — з credentials/credentials.json
 # (OAuth client secret, завантажений з Google Cloud Console).
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
-CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "claude-sonnet-5-5")
-# Модель для етапу 1 (оцінка карток). Тиждень C (19–25.10.2026): Sonnet 5.5 на
-# всіх етапах, як і в онлайн-версії, щоб виміряти ефект Haiku на етапі 1 (B→C,
-# docs/analysis/rejection-log/02_changes.md). Повернути Haiku:
-# CLAUDE_MODEL_CARDS=claude-haiku-4-5-20251001 у .env.
-CLAUDE_MODEL_CARDS = os.environ.get("CLAUDE_MODEL_CARDS", CLAUDE_MODEL)
+# З прогону 26.10.2026: етап 1 (картки) йде паралельно на двох моделях з тим самим
+# промптом. Вердикти ОСНОВНОЇ гілки (Sonnet 5.5) — єдині, що впливають на вивід,
+# відбір, етап 2 і ліміти. Тіньова гілка (Haiku 5.5) лише пишеться в лог відсіву
+# (колонки «Вердикт Haiku»/«Вердикт Sonnet») і в метрики розбіжностей; її вартість
+# не входить у ліміт бюджету запуску. Порожнє CLAUDE_MODEL_CARDS_SHADOW вимикає тінь.
+# Етап 2 (повні тексти) і всі інші виклики моделі (пошта, фріланс, tg_market) — CLAUDE_MODEL.
+CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-5")
+CLAUDE_MODEL_CARDS = os.environ.get("CLAUDE_MODEL_CARDS", "claude-sonnet-5-5")
+CLAUDE_MODEL_CARDS_SHADOW = os.environ.get("CLAUDE_MODEL_CARDS_SHADOW", "claude-haiku-5-5")
 CLAUDE_MODEL_FULLTEXT = os.environ.get("CLAUDE_MODEL_FULLTEXT", CLAUDE_MODEL)
 # Етап 2 (повний текст, дорогий): не більше стільки вакансій, лише High/Medium з етапу 1.
 MAX_FULLTEXT_VACANCIES = 20

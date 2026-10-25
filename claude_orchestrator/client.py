@@ -63,7 +63,7 @@ def call_json(prompt: str, *, max_tokens: int = 8000, retries: int = 1, stage: s
     for attempt in range(retries + 1):
         if tracker.exceeded(budget_limit):
             raise ClaudeBudgetExceededError(
-                f"ліміт бюджету запуску вичерпано (${tracker.total_usd:.4f} ≥ ${budget_limit:.2f})"
+                f"ліміт бюджету запуску вичерпано (${tracker.budget_usd:.4f} ≥ ${budget_limit:.2f})"
             )
         if cache_prefix:
             content = [

@@ -194,6 +194,21 @@ def _low_match_streak(
     return streak >= LOW_MATCH_STREAK_HEURISTIC_RUNS
 
 
+def shadow_summary(step1_result: dict) -> str:
+    """Етап 1, Sonnet vs Haiku: «збіглись N / розійшлись M (Sonnet показав, Haiku
+    відсіяв: a; Haiku показав, Sonnet відсіяв: b); порівняно N, без порівняння T».
+    «Показав» = картка пройшла етап 1 (passes_criteria і не Low). Лише облік."""
+    sh = step1_result.get("shadow") or {}
+    if not sh.get("enabled"):
+        return "тінь вимкнено"
+    return (
+        f"збіглись {sh.get('agree', 0)} / розійшлись {sh.get('disagree', 0)} "
+        f"(Sonnet показав, Haiku відсіяв: {sh.get('sonnet_pass_haiku_reject', 0)}; "
+        f"Haiku показав, Sonnet відсіяв: {sh.get('haiku_pass_sonnet_reject', 0)}); "
+        f"порівняно {sh.get('compared', 0)}, без порівняння {sh.get('not_compared', 0)}"
+    )
+
+
 def run_step4(
     step1_result: dict,
     step2_result: dict,
@@ -261,6 +276,7 @@ def run_step4(
         step1_2_status=step1_2_status,
         step1_2_note=step1_2_note,
         notes=cost_note(),
+        shadow_summary=shadow_summary(step1_result),
     )
 
     saved = False
@@ -295,6 +311,7 @@ def format_selfcheck_block(result: SelfCheckResult) -> str:
         f"Крок 1.2 (фріланс): {result.step1_2_status}"
         + (f" — {result.step1_2_note}" if result.step1_2_note else " — без зауважень"),
     ]
+    lines.append(f"Етап 1, Sonnet vs Haiku (тінь): {result.shadow_summary}")
     if result.notes:
         lines.append(result.notes)
     if result.low_match_streak_signal:
