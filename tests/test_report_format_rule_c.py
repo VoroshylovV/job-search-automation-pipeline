@@ -59,7 +59,8 @@ def test_main_vacancy_item_format():
     block = text.split("**Крок 1 — нові вакансії**")[1].split(CATEGORY_BLOCK_TITLE)[0]
     labels = re.findall(r"^  - ([^:]+):", block, flags=re.M)
     assert labels == ["Match-рівень", "Оцінка відповідності", "Ветеранські бонуси", "Обмеження локації", "Дата публікації"]
-    assert "Ветеранські бонуси: ні (" in block and "Обмеження локації: ні (" in block
+    # Правило Ц п.6: при «ні» — просто «ні», без вигаданої причини
+    assert "  - Ветеранські бонуси: ні\n" in block and "  - Обмеження локації: ні\n" in block
 
 
 def test_location_restriction_explained_and_flags_inside_assessment():
@@ -132,3 +133,11 @@ def test_selfcheck_helpers_split_core_and_notes():
     r = _selfcheck()
     assert "Вартість" not in format_selfcheck_block(r)
     assert any("Вартість" in n for n in selfcheck_notes(r))
+
+
+def test_explanation_required_only_for_yes_rule_c_p6():
+    text = _report([_vac(0, low_match_location=True, low_match_location_reason="лише для тих, хто в Україні")])
+    assert "  - Обмеження локації: так (лише для тих, хто в Україні)\n" in text
+    assert "  - Ветеранські бонуси: ні\n" in text
+    yes = _report([_vac(0, veteran_bonus=True)])
+    assert "  - Ветеранські бонуси: так (" in yes
