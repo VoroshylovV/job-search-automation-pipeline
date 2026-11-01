@@ -25,6 +25,7 @@ from config import (
     CATEGORY_NONE,
     COMPARISON_SHEET_TITLE,
     EXIT_CODE_ALARM,
+    GMAIL_LABEL_NAME,
     METRICS_KEY_COLUMNS,
     METRICS_SHEET_TITLE,
 )
@@ -37,7 +38,7 @@ from pipeline.reject_log import write_reject_log
 from pipeline.step2_mail import run_step2
 from pipeline.step3_metrics import run_step3
 from pipeline.step3_tracker import run_step3_tracker
-from pipeline.step4_selfcheck import format_selfcheck_block, mark_run_started, run_step4
+from pipeline.step4_selfcheck import format_selfcheck_block, mark_run_started, run_step4, selfcheck_notes
 from pipeline.verify_writes import (
     SIMULATE_KEYS,
     VERIFIED_OK_LINE,
@@ -82,35 +83,48 @@ logger = logging.getLogger("main")
 _FREELANCE_SOURCE_LABEL = {"freelancehunt.com": "Freelancehunt", "telegram": "Telegram"}
 
 
-def _format_freelance_project(v) -> list[str]:
+def _format_freelance_project(v) -> str:
+    """Один рядок на проєкт (Правило Ц п.1: Крок 1.2 — 1–2 рядки)."""
     label = _FREELANCE_SOURCE_LABEL.get(v.source, v.source)
-    lines = [f"- **{v.title}** | {v.category} | [{label}]({v.url})"]
+    parts = [f"**{v.title}**", v.category, f"[{label}]({v.url})"]
     if v.competition_level:
-        lines.append(f"  - Кількість ставок: {v.bids_count} ({v.competition_level} конкуренція)")
-    lines.append(f"  - Бюджет: {v.budget_raw or 'не вказано'}")
-    lines.append(f"  - Дата публікації: {v.posted_date or 'невизначена'}")
-    lines.append(f"  - Чому пройшов фільтр: {v.why_relevant}\n")
-    return lines
+        parts.append(f"ставок {v.bids_count} ({v.competition_level} конкуренція)")
+    parts.append(f"бюджет: {v.budget_raw or 'не вказано'}")
+    parts.append(f"дата: {v.posted_date or 'невизначена'}")
+    parts.append(v.why_relevant)
+    return "- " + " | ".join(parts)
+
+
+def _vacancy_marks(v) -> str:
+    marks = list(v.flags) + (["лише картка"] if v.card_only else [])
+    if v.company_flag:
+        marks.append(v.company_flag)
+    return f" [{'; '.join(marks)}]" if marks else ""
 
 
 def _format_vacancy(v, with_category: bool = False) -> list[str]:
+    """Основний список — формат Правила Ц п.2 (Посада | Компанія | [джерело](URL);
+    Match-рівень, Оцінка відповідності, Ветеранські бонуси, Обмеження локації,
+    Дата публікації). Блок ветеранів/інвалідності (with_category) — формат пункту
+    без змін (Правило Н п.3): + Ветерани, Інвалідність, Категорія."""
     lines = [f"- **{v.title}** | {v.company} | [{v.source}]({v.url or 'н/д'})"]
     lines.append(f"  - Match-рівень: {v.match_level}")
-    # Позначки — у «Оцінка відповідності», як в онлайн-промпті (Крок 1 п.2, Правило И).
-    marks = list(v.flags) + (["лише картка"] if v.card_only else [])
-    reasoning = v.match_reasoning + (f" [{'; '.join(marks)}]" if marks else "")
-    lines.append(f"  - Оцінка відповідності: {reasoning}")
-    lines.append(f"  - Ветерани: {'так' if v.veteran_bonus else 'ні'}")
-    lines.append(f"  - Інвалідність: {'так' if v.disability else 'ні'}")
-    if with_category:
-        lines.append(f"  - Категорія: {v.category}")
+    lines.append(f"  - Оцінка відповідності: {v.match_reasoning}{_vacancy_marks(v)}")
     loc = "так" if v.low_match_location else "ні"
     if v.low_match_location:
         loc += f" ({v.low_match_location_reason})"
-    lines.append(f"  - Обмеження локації: {loc}")
-    if v.company_flag:
-        lines.append(f"  - Прапорець: {v.company_flag}")
     date_str = "невизначена" if v.date_undetermined else (v.posted_date or "невизначена")
+    if with_category:
+        lines.append(f"  - Ветерани: {'так' if v.veteran_bonus else 'ні'}")
+        lines.append(f"  - Інвалідність: {'так' if v.disability else 'ні'}")
+        lines.append(f"  - Категорія: {v.category}")
+        lines.append(f"  - Обмеження локації: {loc}")
+        lines.append(f"  - Дата публікації: {date_str}\n")
+        return lines
+    vet = "так (ветеранські програми / бронювання / цінність ветеранського бекграунду)" if v.veteran_bonus \
+        else "ні (ознак ветеранських програм у тексті не знайдено)"
+    lines.append(f"  - Ветеранські бонуси: {vet}")
+    lines.append(f"  - Обмеження локації: {loc if v.low_match_location else 'ні (вимоги бути фізично в Україні немає)'}")
     lines.append(f"  - Дата публікації: {date_str}\n")
     return lines
 
@@ -125,17 +139,24 @@ def format_report(
     alarms: list[str] | None = None,
     verified_ok: bool = False,
 ) -> str:
+    """Фінальний вивід за Правилом Ц (docs/ALIGNMENT.md): жирні блоки в порядку
+    Крок 1 → 1.2 → 2 → 3 → 4 → «Примітки» (наприкінці). Службове (лічильники,
+    відхилення, припущення, статус записів) — лише в «Примітки». Тривоги
+    (alarm) і підсумок верифікації запису лишаються першими рядками поза блоками —
+    це сигнал збою/успіху запису, не форматування."""
     lines: list[str] = []
+    notes: list[str] = []  # усе службове -> «Примітки»
     if alarms:  # ПЕРШІ рядки звіту (консоль, reports/); те саме — на початку push
         lines.append(alarm.format_block(alarms))
         lines.append("")
-    if verified_ok:  # підсумок верифікації запису (pipeline/verify_writes.py)
+    if verified_ok:  # підсумок верифікації запису (pipeline/verify_writes.py) — перший рядок, як і тривоги
         lines.append(VERIFIED_OK_LINE)
         lines.append("")
     vacancies = step1_result["vacancies"]
 
-    lines.append("## Крок 1 — нові вакансії\n")
-    # Категорія ≠ «—» (ветеран / інвалідність) — окремий блок після основного
+    # ---- Крок 1 ----
+    lines.append("**Крок 1 — нові вакансії**\n")
+    # Категорія ≠ «—» (ветеран / інвалідність) — окремий розділ після основного
     # списку; фільтри для таких вакансій ті самі (змінюється лише вивід).
     main_list = [v for v in vacancies if v.category == CATEGORY_NONE]
     category_list = [v for v in vacancies if v.category != CATEGORY_NONE]
@@ -150,90 +171,83 @@ def format_report(
         lines.extend(_format_vacancy(v, with_category=True))
     lines.append("")
 
-    # Блок «Майже підійшли» — щодня, одразу після основного списку (Правило И п.7).
+    # Підрозділ «Майже підійшли» — щодня, одразу після розділу ветеранів (Правило Ц п.2).
     near = step1_result.get("near_misses") or []
     lines.append("**Майже підійшли**" + ("" if near else ": немає"))
     for nm in near:
         lines.append(f"- **{nm.title}** | {nm.company} | [{nm.source}]({nm.url}) | не виконано: {nm.unmet}")
     lines.append("")
 
-    # Статуси всіх джерел — окремим рядком після списку (Правило В, И п.8).
-    status_parts = []
-    for st in step1_result["source_statuses"].values():
-        status_parts.append(f"{st.source}: {st.status}")
+    # Один рядок про джерела — усі 5 поіменно зі статусами (Правило В, Ц п.2).
+    status_parts = [f"{st.source}: {st.status}" for st in step1_result["source_statuses"].values()]
     if status_parts:
         lines.append("Статуси джерел: " + "; ".join(status_parts) + "\n")
+    for key in ("dedup_log_note", "unknown_date_note"):
+        if step1_result.get(key):
+            notes.append(step1_result[key])
 
-    # Службові подробиці — окремим блоком «Примітки», не всередині списку.
-    notes: list[str] = []
-    if step1_result.get("dedup_log_note"):
-        notes.append(step1_result["dedup_log_note"])
-    if step1_result.get("unknown_date_note"):
-        notes.append(step1_result["unknown_date_note"])
-    if notes:
-        lines.append("**Примітки**")
-        lines.extend(f"- ⚠️ {n}" for n in notes)
-        lines.append("")
-
-    lines.append("\n## Крок 1.2 — фріланс-проєкти\n")
+    # ---- Крок 1.2 (1–2 рядки) ----
+    lines.append("\n**Крок 1.2 — фріланс**\n")
     projects = step1_2_result.get("projects", [])
     if not projects:
         lines.append("Нових релевантних фріланс-проєктів не знайдено.\n")
     else:
-        for v in projects:
-            lines.extend(_format_freelance_project(v))
-        # «не знайдено» окремо по кожному з трьох джерел, якщо різниця є.
-        groups = {"BI и аналитика данных": "Freelancehunt — BI и аналитика данных",
-                  "Базы данных и SQL": "Freelancehunt — Базы данных и SQL", "Telegram": "Telegram-канал"}
-        present = {("Telegram" if v.source == "telegram" else v.category) for v in projects}
-        for key, name in groups.items():
-            if key not in present:
-                lines.append(f"{name}: нових релевантних фріланс-проєктів не знайдено.")
+        lines.extend(_format_freelance_project(v) for v in projects)
         lines.append("")
-
     fl_unavailable = [
         s.source for s in step1_2_result.get("source_statuses", {}).values() if s.status == "недоступне"
     ]
     if fl_unavailable:
-        lines.append(f"⚠️ Недоступні джерела Кроку 1.2 у цьому запуску: {', '.join(fl_unavailable)}\n")
+        notes.append(f"Недоступні джерела Кроку 1.2 у цьому запуску: {', '.join(fl_unavailable)}")
     if step1_2_result.get("dedup_log_note"):
-        lines.append(f"⚠️ {step1_2_result['dedup_log_note']}\n")
+        notes.append(step1_2_result["dedup_log_note"])
 
-    lines.append("\n## Крок 2 — пошта\n")
+    # ---- Крок 2 ----
+    lines.append("\n**Крок 2 — пошта**\n")
     findings = step2_result.get("findings", [])
     if not findings:
         lines.append("Нових листів не знайдено.\n")
     else:
-        for f in findings:
-            status_str = f" | Статус: {f.status}" if f.status else ""
-            lines.append(f"- {f.sender} | {f.subject} | {f.date}{status_str}")
-            lines.append(f"  {f.summary}\n")
-    for note in step2_result.get("notes") or []:
-        lines.append(f"⚠️ {note}")
+        for n, f in enumerate(findings, 1):
+            lines.append(f"{n}. {f.sender} | {f.subject} | {f.date} | {f.summary}")
+            lines.append(f"   Статус: {f.status or 'не визначено'}")
+        lines.append("")
+        lines.append(f"Лейбл «{GMAIL_LABEL_NAME}» додано до листів: {len(findings)}.\n")
+    notes.extend(step2_result.get("notes") or [])
 
-    lines.append("\n## Крок 3 — метрики\n")
+    # ---- Крок 3 ----
+    # «Без відповіді понад місяць» (Правило З) реалізоване лише в онлайн-версії;
+    # у репо такої перевірки немає (docs/ALIGNMENT.md) — блок показується, але
+    # порожній. Статус запису метрики — службове, тому в «Примітки».
+    lines.append("\n**Крок 3 — без відповіді понад місяць**\n")
+    lines.append("Не застосовується в десктоп-версії (нагадування Правила З — лише онлайн).\n")
     if step3_result.get("saved"):
-        lines.append("Метрику збережено у «Метрики автопошуку вакансій».")
+        notes.append("Метрику збережено у «Метрики автопошуку вакансій».")
     else:
-        lines.append(f"⚠️ Метрику не вдалося зберегти: {step3_result.get('error')}")
+        notes.append(f"⚠️ Метрику не вдалося зберегти: {step3_result.get('error')}")
 
-    lines.append("\n## Крок 4 — самоперевірка запуску\n")
+    # ---- Крок 4 ----
+    lines.append("\n**Крок 4 — самоперевірка**\n")
     lines.append(format_selfcheck_block(step4_result["result"]))
+    lines.append("")
+    notes.extend(selfcheck_notes(step4_result["result"]))
     if not step4_result.get("saved"):
-        lines.append(
-            f"\n⚠️ Результат перевірки виведено вище, але у файл «Результат щоденної "
+        notes.append(
+            f"⚠️ Результат перевірки виведено вище, але у файл «Результат щоденної "
             f"перевірки» продубльовано не було: {step4_result.get('error')}"
         )
 
     if step5_result and step5_result.get("active"):
-        lines.append("\n\n## Крок 5 — порівняння з автоматичним (чат) запуском\n")
-        lines.append(format_comparison_block(step5_result["row"]))
+        notes.append("Порівняння з автоматичним (чат) запуском:\n" + format_comparison_block(step5_result["row"]))
         if not step5_result.get("saved"):
-            lines.append(
-                f"\n⚠️ Порівняння виведено вище, але у «{COMPARISON_SHEET_TITLE}» "
+            notes.append(
+                f"⚠️ Порівняння виведено вище, але у «{COMPARISON_SHEET_TITLE}» "
                 f"продубльовано не було: {step5_result.get('error')}"
             )
 
+    # ---- Примітки (наприкінці) ----
+    lines.append("**Примітки**")
+    lines.extend(f"- {n}" for n in notes) if notes else lines.append("- без зауважень")
     return "\n".join(lines)
 
 

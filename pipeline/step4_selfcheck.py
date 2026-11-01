@@ -327,9 +327,14 @@ def run_step4(
 
 
 def format_selfcheck_block(result: SelfCheckResult) -> str:
+    """Крок 4 — компактний список «Крок N: OK/ЧАСТКОВО — …», джерела X/5,
+    спосіб збору, конверсія, порівнюваність (Правило Ц п.4). Службове
+    (час перевірки, вартість, тінь Sonnet/Haiku, евристичний сигнал) — у
+    selfcheck_notes() -> «Примітки»."""
     lines = [
-        f"Перевірка запуску {result.timestamp_utc}",
         f"Крок 1: {result.step1_status}" + (f" — {result.step1_note}" if result.step1_note else " — без зауважень"),
+        f"Крок 1.2: {result.step1_2_status}"
+        + (f" — {result.step1_2_note}" if result.step1_2_note else " — без зауважень"),
         f"Крок 2: {result.step2_status}" + (f" — {result.step2_note}" if result.step2_note else " — без зауважень"),
         f"Крок 3 (метрика): {result.step3_metrics_status}"
         + (f" — {result.step3_metrics_note}" if result.step3_metrics_note else " — без зауважень"),
@@ -340,16 +345,23 @@ def format_selfcheck_block(result: SelfCheckResult) -> str:
         + ("%" if result.conversion_pct != "н/д" else ""),
         "Порівнюваність тренду: "
         + ("так" if result.trend_comparable else f"ні ({result.trend_comparable_reason})"),
-        f"Крок 1.2 (фріланс): {result.step1_2_status}"
-        + (f" — {result.step1_2_note}" if result.step1_2_note else " — без зауважень"),
     ]
-    lines.append(f"Етап 1, Sonnet vs Haiku (тінь): {result.shadow_summary}")
-    if result.notes:
-        lines.append(result.notes)
-    if result.low_match_streak_signal:
-        lines.append(
+    return "\n".join(f"- {line}" for line in lines)
+
+
+def selfcheck_notes(result) -> list[str]:
+    """Службові рядки самоперевірки для блоку «Примітки» (Правило Ц п.5)."""
+    notes: list[str] = []
+    if getattr(result, "timestamp_utc", ""):
+        notes.append(f"Перевірка запуску {result.timestamp_utc}")
+    if getattr(result, "shadow_summary", ""):
+        notes.append(f"Етап 1, Sonnet vs Haiku (тінь): {result.shadow_summary}")
+    if getattr(result, "notes", ""):
+        notes.append(result.notes)
+    if getattr(result, "low_match_streak_signal", False):
+        notes.append(
             f"⚠️ Сигнал (евристика): {LOW_MATCH_STREAK_HEURISTIC_RUNS}+ запуски поспіль лише "
             "Low/нуль при повному 5/5 покритті — варто переглянути фільтр досвіду/ЗП вручну "
             "(не обов'язково ознака ринку)."
         )
-    return "\n".join(lines)
+    return notes

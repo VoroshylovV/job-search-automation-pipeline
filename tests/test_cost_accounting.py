@@ -134,4 +134,5 @@ def test_selfcheck_result_and_block_include_cost(monkeypatch):
                      {}, {"saved": True}, "2026-10-11 12:00 UTC")["result"]
     assert "Вартість Claude: $3.000" in r.notes
     assert r.as_row()[10] == r.notes
-    assert r.notes in s4.format_selfcheck_block(r)
+    assert r.notes in s4.selfcheck_notes(r)  # вартість — службове, тому в «Примітки» (Правило Ц п.5)
+    assert r.notes not in s4.format_selfcheck_block(r)
