@@ -121,10 +121,10 @@ def _format_vacancy(v, with_category: bool = False) -> list[str]:
         lines.append(f"  - Обмеження локації: {loc}")
         lines.append(f"  - Дата публікації: {date_str}\n")
         return lines
-    vet = "так (ветеранські програми / бронювання / цінність ветеранського бекграунду)" if v.veteran_bonus \
-        else "ні (ознак ветеранських програм у тексті не знайдено)"
+    # Пояснення обов'язкове лише при «так»; при «ні» — просто «ні», причину не вигадуємо (Правило Ц п.6).
+    vet = "так (див. Оцінку відповідності)" if v.veteran_bonus else "ні"
     lines.append(f"  - Ветеранські бонуси: {vet}")
-    lines.append(f"  - Обмеження локації: {loc if v.low_match_location else 'ні (вимоги бути фізично в Україні немає)'}")
+    lines.append(f"  - Обмеження локації: {loc}")
     lines.append(f"  - Дата публікації: {date_str}\n")
     return lines
 
