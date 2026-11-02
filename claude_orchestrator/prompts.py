@@ -24,7 +24,7 @@ from config import (
     MAX_ENGLISH_LEVEL,
     MAX_EXPERIENCE_YEARS,
     MIN_SALARY_UAH,
-    MIN_SALARY_USD_APPROX,
+    MIN_SALARY_USD,
     NEAR_MISS_MIN_SALARY_UAH,
 )
 from models import RawFreelanceProject, RawJobPosting
@@ -57,7 +57,10 @@ Operations Analyst, CRM-аналітик, Operations/Systems/Business Data Analy
 майданчиках зазвичай потрапляють у категорію "1 рік досвіду" — не відхиляй \
 їх через це.
 - Формат: віддалено/remote (Україна або worldwide).
-- ЗП: від {MIN_SALARY_UAH} грн (або еквівалент у $, ≈ ${MIN_SALARY_USD_APPROX}) АБО не вказана.
+- ЗП: поріг залежить від валюти, вказаної у вакансії, БЕЗ конвертації між \
+валютами: у гривнях — від {MIN_SALARY_UAH} грн, у доларах — від ${MIN_SALARY_USD}; \
+для іншої валюти порівнюй за приблизним еквівалентом у $ (поріг ${MIN_SALARY_USD}). \
+АБО ЗП не вказана.
 - Англійська: до {MAX_ENGLISH_LEVEL} включно у вимогах (відхиляй C1+). Вимога \
 "B2+"/"Upper-Intermediate+" НЕ відхиляє — додай у flags "англ. B2+".
 - Вимога вищої математичної/технічної освіти НЕ відхиляє — додай у flags \
