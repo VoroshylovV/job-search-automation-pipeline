@@ -51,3 +51,13 @@ def test_freelance_prompt_mentions_today_exactly_once():
     prompt = build_freelance_eval_prompt([project], today=today)
     assert prompt.count(today.isoformat()) == 1
     assert "Сьогоднішня дата: 2026-09-24" in prompt
+
+
+def test_salary_threshold_is_per_currency_without_conversion():
+    """02.11.2026: у гривнях від 30 000, у доларах від $700; без «≈ $720» еквіваленту."""
+    import config
+    from claude_orchestrator.prompts import VACANCY_EVAL_SYSTEM_PROMPT as P
+    assert (config.MIN_SALARY_UAH, config.MIN_SALARY_USD) == (30_000, 700)
+    assert "від 30000 грн" in P and "від $700" in P and "БЕЗ конвертації" in P
+    assert "720" not in P
+    assert not hasattr(config, "MIN_SALARY_USD_APPROX")
