@@ -38,7 +38,8 @@ EXCLUDED = re.compile(r"yandex|яндекс|mail\.ru|\bvk\b|вк\b|russia|рос
                       r"гембл|gambl|букмекер|adult|forex|форекс|binary option", re.I)
 MATCH_WINDOW_DAYS = 30
 FUZZY_JACCARD = 0.6
-PERSONAL_CODES = {"роль", "досвід", "формат", "зп", "англійська"}
+# Коди відсіву за критеріями кандидата (реальна вакансія, не підійшла саме йому) — потрапляють у широку базу.
+PERSONAL_CODES = {"роль", "досвід", "формат", "зп", "англійська", "військова служба"}
 
 _SKILL_ALIASES = {"postgres": "postgresql", "gbq": "bigquery", "google bigquery": "bigquery",
                   "google data studio": "looker studio", "data studio": "looker studio", "powerbi": "power bi",
@@ -107,6 +108,8 @@ def board_status(result: str, code: str) -> str | None:
     r, c = (result or "").strip().lower(), (code or "").strip().lower()
     if "підсумок" in r or r.startswith("не оцінено"):
         return None
+    if r.startswith("майже"):          # блок «Майже підійшли»: не показано, не пройшов один критерій
+        return "personal_reject"
     if "відсі" in r:
         if c == "подано":
             return "applied"
