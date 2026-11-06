@@ -1,4 +1,4 @@
-"""Помісячний звіт: Telegram за напрямами IT + порівняння кількості аналітичних вакансій TG vs репо.
+"""Помісячний звіт: Telegram за напрямами й рівнями IT + порівняння аналітичних вакансій TG vs репо.
 
     python -m tg_market.monthly --since 2026-08-01 --logs logs
 
@@ -16,7 +16,7 @@ from datetime import date
 from pathlib import Path
 
 from tg_market.analyze import SMALL_N
-from tg_market.classify import DIRECTIONS
+from tg_market.classify import DIRECTIONS, LEVELS
 from tg_market.compare import load_board, load_tg, write_csv
 
 JUNIOR = {"intern", "junior"}
@@ -67,6 +67,22 @@ def main() -> None:
     table("Telegram: унікальні IT-вакансії за напрямами (місяць першої появи)",
           ["напрям", *months, "разом", "junior+intern"], rows)
     write_csv("monthly_tg_direction.csv", out)
+
+    # 1б. По кожному місяцю: напрям × рівень
+    lvl_out = []
+    for m in months:
+        mrows = []
+        for d in DIRECTIONS:
+            if d == "non-it":
+                continue
+            sub = [u for u in it if u["direction"] == d and ym(u["date"]) == m]
+            per = [sum(1 for u in sub if u["level"] == lv_) for lv_ in LEVELS]
+            mrows.append([d, *per, len(sub)])
+            lvl_out.append({"month": m, "direction": d, **dict(zip(LEVELS, per)), "total": len(sub)})
+        tot_l = [sum(r[i + 1] for r in mrows) for i in range(len(LEVELS) + 1)]
+        mrows.append(["УСЬОГО IT", *tot_l])
+        table(f"Telegram {m}: напрям × рівень (унікальні IT-вакансії)", ["напрям", *LEVELS, "разом"], mrows)
+    write_csv("monthly_tg_direction_level.csv", lvl_out)
 
     # 2. Рівні в аналітиці по місяцях
     lv = []
