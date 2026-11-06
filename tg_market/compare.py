@@ -182,11 +182,12 @@ def load_tg(start: date, end: date) -> list[dict]:
         reclassify(u)
         cluster = [r for r in by_key[(norm_title(u["title"]), norm_company(u["company"]))]
                    if u["first_seen"] <= r["datetime"][:10] <= u["last_seen"]] or []
-        exps = [e for e in (_num(r["experience_years_min"]) for r in cluster) if e is not None]
-        sal = next((r for r in cluster if _num(r["salary_min"]) is not None or _num(r["salary_max"]) is not None), None)
+        # .get: у старих vacancies.csv могло не бути частини колонок (salary_period, experience_years_min тощо)
+        exps = [e for e in (_num(r.get("experience_years_min")) for r in cluster) if e is not None]
+        sal = next((r for r in cluster if _num(r.get("salary_min")) is not None or _num(r.get("salary_max")) is not None), None)
         u.update(experience=min(exps) if exps else None,
-                 salary_min=_num(sal["salary_min"]) if sal else None, salary_max=_num(sal["salary_max"]) if sal else None,
-                 salary_currency=sal["salary_currency"] if sal else "", salary_period=sal["salary_period"] if sal else "")
+                 salary_min=_num(sal.get("salary_min")) if sal else None, salary_max=_num(sal.get("salary_max")) if sal else None,
+                 salary_currency=(sal.get("salary_currency") or "") if sal else "", salary_period=(sal.get("salary_period") or "") if sal else "")
     normalize_skills(uniques)
     for u in uniques:
         u.update(date=parse_date(u["first_seen"]), last=parse_date(u["last_seen"]), title_key=norm_title(u["title"]),
