@@ -2,13 +2,15 @@
 
     python -m tg_market.monthly --since 2026-08-01 --logs logs
 
-Одиниця — унікальна вакансія (дедуплікація як в analyze/compare), місяць = перша поява.
-Сайти: логи пайплайну; напрям визначено евристикою за назвою (compare.guess_direction), тож
-цифри сайтів — оцінка. Логи сайтів існують не за весь період — місяці без даних позначені «—».
+TG: унікальна вакансія, місяць = перша поява (дедуплікація як в analyze/compare).
+Репо (сайти): для кожного місяця логи беруться окремо й дедуплікуються всередині місяця
+(вакансія, що повторилась у двох місяцях, рахується в обох). Напрям — евристика за назвою
+(compare.guess_direction). Місяці без логів позначені «—».
 """
 from __future__ import annotations
 
 import argparse
+from calendar import monthrange
 from collections import Counter
 from datetime import date
 from pathlib import Path
@@ -29,6 +31,11 @@ def table(title: str, header: list[str], rows: list[list]) -> None:
     w = [max(len(str(x)) for x in col) for col in zip(header, *rows)]
     for r in [header, *rows]:
         print("  " + "  ".join(str(x).rjust(w[i]) if i else str(x).ljust(w[i]) for i, x in enumerate(r)))
+
+
+def month_bounds(m: str, start: date, end: date) -> tuple[date, date]:
+    y, mo = map(int, m.split("-"))
+    return max(date(y, mo, 1), start), min(date(y, mo, monthrange(y, mo)[1]), end)
 
 
 def main() -> None:
@@ -70,15 +77,14 @@ def main() -> None:
                    sum(1 for u in an if u["level"] in {"middle", "senior", "lead"})])
     table("Telegram, аналітика за рівнем", ["місяць", "всього", "junior+intern", "не вказано", "middle+"], lv)
 
-    # 3. TG vs репо (сайти) — аналітика
-    board, _, _ = load_board(Path(a.logs), start, end)
-    bm = sorted({ym(b["date"]) for b in board})
+    # 3. TG vs репо (сайти) — аналітика, кожен місяць окремо
     cmp_rows, cmp_out = [], []
-    for m in sorted(set(months) | set(bm)):
+    for m in months:
         tg_an = [u for u in it if u["direction"] == "analytics" and ym(u["date"]) == m]
         tg_jr = sum(1 for u in tg_an if u["level"] in JUNIOR | {"unspecified"})
-        b = [x for x in board if ym(x["date"]) == m]
-        has = m in bm
+        s, e = month_bounds(m, start, end)
+        b, _, _ = load_board(Path(a.logs), s, e)
+        has = bool(b)
         b_an = [x for x in b if x["direction"] == "analytics"]
         s_an = sum(1 for x in b_an if x["status"] in ("shown", "applied"))
         row = [m, len(tg_an), tg_jr, s_an if has else "—", len(b_an) if has else "—", len(b) if has else "—"]
@@ -91,7 +97,7 @@ def main() -> None:
     write_csv("monthly_tg_vs_repo.csv", cmp_out)
     print(f"\nМала вибірка: n<{SMALL_N}. Сайти: напрям за евристикою назви; "
           "wide = показані+подані+відсіяні за роль/досвід/формат/ЗП.")
-    print("Місяць репо без даних = логів ще не було (reject-лог з 27.09, локальні з 26.10).")
+    print("Місяць репо без даних = логів ще не було (reject-лог з 27.09, локальні з 26.10). Листопад неповний.")
 
 
 if __name__ == "__main__":
