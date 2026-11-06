@@ -35,6 +35,14 @@ def test_board_status_codes():
     assert board_status("ПІДСУМОК", "") is None
 
 
+def test_board_status_near_miss_and_unevaluated_from_real_logs():
+    # «майже» — блок «Майже підійшли»: НЕ показано, не відповідає одному критерію → лише широка база
+    assert board_status("майже", "досвід") == "personal_reject"
+    assert board_status("відсіяно", "військова служба") == "personal_reject"
+    assert board_status("не оцінено (ліміт етапу 2)", "ліміт_етапу_2") is None
+    assert board_status("не оцінено (помилка Claude)", "помилка_Claude") is None
+
+
 def test_match_levels_and_window():
     t, b = _tg(), _tg(title="Data Analyst (junior)", company="ORNIS", date=date(2026, 10, 10))
     assert match_level(t, b) == "exact"
