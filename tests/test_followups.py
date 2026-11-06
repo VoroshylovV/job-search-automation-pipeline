@@ -139,8 +139,11 @@ def test_only_known_modules_consume_reject_log():
         text = path.read_text(encoding="utf-8")
         if re.search(r"REJECT_LOG_HEADER|reject_log import|import reject_log|pipeline\.reject_log|REJECT_LOG_FOLDER_ID", text):
             users.add(rel)
+    # local_log — лише згадка в докстрингу, лог не читає.
+    # tg_market/compare.py — офлайн-аналітика: читає logs/*.csv напряму (без імпорту пайплайну) і сам
+    # пропускає рядок «ПІДСУМОК» (compare.board_status), тому дозволений споживач.
     assert users == {"config.py", "models.py", "main.py", "pipeline/reject_log.py", "pipeline/verify_writes.py",
-                     "pipeline/local_log.py"}  # local_log — лише згадка в докстрингу, лог не читає
+                     "pipeline/local_log.py", "tg_market/compare.py"}
 
 
 # --- 5. «повтор N» у verify_writes ---------------------------------------------------------------
