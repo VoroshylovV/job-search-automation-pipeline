@@ -14,6 +14,7 @@ import argparse
 import csv
 import json
 import logging
+import os
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -28,6 +29,9 @@ BASE = Path(__file__).parent
 DATA = BASE / "data"
 CHUNK = 10  # дайджести з 10+ вакансій у пості роздувають відповідь — менші порції
 PAUSE_SECONDS = 1.5  # ввічлива пауза між сторінками t.me
+# Модель лише для tg_market; решта пайплайну лишається на config.CLAUDE_MODEL.
+# Перебити можна змінною TG_MARKET_MODEL у .env.
+TG_MARKET_MODEL = os.environ.get("TG_MARKET_MODEL", "claude-haiku-5-5")
 
 POST_FIELDS = ["channel", "post_id", "datetime", "views", "classified", "is_vacancy", "vacancy_count", "collected_at"]
 VAC_FIELDS = ["channel", "post_id", "datetime", "vacancy_idx", "title", "company", "is_it", "direction",
@@ -69,7 +73,7 @@ def _classify_chunk(chunk: list[Post], result: dict[str, dict]) -> None:
     """Якщо відповідь обірвалась (невалідний JSON) — ділимо порцію навпіл.
     Один пост, який не вдалося розібрати, пропускаємо з позначкою, а не валимо весь запуск."""
     try:
-        data = call_json(build_prompt(chunk), max_tokens=16000)
+        data = call_json(build_prompt(chunk), max_tokens=16000, model=TG_MARKET_MODEL)
     except ClaudeCallError as exc:
         if len(chunk) == 1:
             logger.warning("%s/%s: не вдалося розібрати (%s) — пропущено", chunk[0].channel, chunk[0].post_id, exc)
