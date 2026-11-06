@@ -78,7 +78,7 @@ def test_classify_splits_chunk_on_truncated_json(monkeypatch):
     posts = [Post("c", i, "2026-09-01T00:00:00+00:00", 1, f"t{i}") for i in range(4)]
     calls = []
 
-    def fake(prompt, max_tokens):
+    def fake(prompt, max_tokens, model=None):
         n = prompt.count('"key"')
         calls.append(n)
         if n > 2:
