@@ -5,7 +5,8 @@
 TG: унікальна вакансія, місяць = перша поява (дедуплікація як в analyze/compare).
 Репо (сайти): для кожного місяця логи беруться окремо й дедуплікуються всередині місяця
 (вакансія, що повторилась у двох місяцях, рахується в обох). Напрям — евристика за назвою
-(compare.guess_direction). Місяці без логів позначені «—».
+(compare.guess_direction). wide = показані + подані + відсіяні за роль/досвід/формат/ЗП
+(технічні відсіви — дата, дубль, інше — не рахуються, як у compare). Місяці без логів — «—».
 """
 from __future__ import annotations
 
@@ -20,6 +21,7 @@ from tg_market.classify import DIRECTIONS, LEVELS
 from tg_market.compare import load_board, load_tg, write_csv
 
 JUNIOR = {"intern", "junior"}
+WIDE = ("shown", "applied", "personal_reject")
 
 
 def ym(d: date) -> str:
@@ -100,6 +102,7 @@ def main() -> None:
         tg_jr = sum(1 for u in tg_an if u["level"] in JUNIOR | {"unspecified"})
         s, e = month_bounds(m, start, end)
         b, _, _ = load_board(Path(a.logs), s, e)
+        b = [x for x in b if x["status"] in WIDE]
         has = bool(b)
         b_an = [x for x in b if x["direction"] == "analytics"]
         s_an = sum(1 for x in b_an if x["status"] in ("shown", "applied"))
