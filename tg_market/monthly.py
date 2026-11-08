@@ -18,10 +18,10 @@ from pathlib import Path
 
 from tg_market.analyze import SMALL_N
 from tg_market.classify import DIRECTIONS, LEVELS
-from tg_market.compare import load_board, load_tg, write_csv
+from tg_market.compare import SITE_WIDE, load_board, load_tg, write_csv
 
 JUNIOR = {"intern", "junior"}
-WIDE = ("shown", "applied", "personal_reject")
+WIDE = SITE_WIDE   # єдине визначення «wide» — у compare.py
 
 
 def ym(d: date) -> str:

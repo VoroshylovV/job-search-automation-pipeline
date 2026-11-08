@@ -200,3 +200,28 @@ python -m tg_market.collect --since 2026-08-01 --panel all --backfill-raw
 
 Вакансії поста зіставляються за схожістю назв (≥ 0,6). Випадкова вибірка дає похибку для всієї зібраної вибірки;
 по окремих напрямах n буде малим — інтервал це покаже.
+
+## Аудит збігів із сайтами (`compare`)
+
+`python -m tg_market.compare --month 2026-10` тепер пише ще й `out/compare_match_audit.csv`: **усі** пари
+«вакансія сайту ↔ вакансія Telegram», що пройшли зіставлення (не лише найкращі). Колонки: `level` (`url` | `exact` |
+`fuzzy` | `title_only`), `is_best` (пара, що реально рахується в покритті), `counted_in` (`low+high` або `high_only` для
+`title_only`), ключі й оцінки (`url_equal`, `company_equal`, `title_equal`, `title_jaccard`, `company_sim`,
+`date_gap_days`, `score`), статус на сайті (`site_status`, `in_strict`), поля обох вакансій для швидкої ручної перевірки.
+`score` — описова оцінка (0,6·схожість назв + 0,4·схожість компаній, URL-збіг = 1,0), не ймовірність і не впливає
+на те, що вважається збігом. Логіка зіставлення не змінена; `is_best` збігається з вибором `best_matches`.
+
+Перевірка діапазону перетину: відкрий `compare_match_audit.csv`, у колонці `verdict` познач `y`/`n` для рядків
+`is_best=True` (спершу `title_only` і `fuzzy`: вони найслабші), потім
+
+```
+python -m tg_market.compare --score-audit tg_market/data/out/compare_match_audit.csv
+```
+
+Друкує і пише `compare_match_precision.csv`: по кожному рівню — скільки перевірено, скільки правильних, точність і
+95% інтервал Вілсона. Некоректний `verdict` — помилка зі списком рядків.
+
+**Єдине визначення баз** (константи `SITE_STRICT` / `SITE_WIDE` у `compare.py`, `monthly.py` бере їх звідти):
+`strict` = показані + подані; `wide` = strict + відсіяні за критеріями кандидата (роль/досвід/формат/ЗП/…) і «майже підійшли».
+Технічні відсіви (дубль, помилка, ліміт) не входять нікуди. Telegram: `strict` = вакансії після `profile_reject`,
+`wide` = усі вакансії Telegram періоду.

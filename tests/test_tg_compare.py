@@ -67,3 +67,63 @@ def test_profile_reject_codes_follow_pipeline_criteria():
 def test_previous_month_wraps_year():
     assert previous_month(date(2026, 11, 5)) == "2026-10"
     assert previous_month(date(2027, 1, 5)) == "2026-12"
+
+
+# ----------------------------------------------------------------------------- аудит збігів
+def _tgv(title, company, link="", day=3, **kw):
+    return _tg(title=title, company=company, link=link, url_key=kw.pop("url_key", ""), first_seen=f"2026-10-{day:02d}",
+               channels="ch", date=date(2026, 10, day), last=date(2026, 10, day), **kw)
+
+
+def _site(title, company, status="shown", url="", day=5, url_key=""):
+    base = _tg(title=title, company=company, date=date(2026, 10, day), last=date(2026, 10, day), url_key=url_key)
+    base.update(status=status, url=url, source="djinni")
+    return base
+
+
+def test_audit_pairs_are_consistent_with_best_matches_and_carry_keys():
+    from tg_market.compare import audit_pairs, best_matches
+    tg = [_tgv("Data Analyst", "Ornis", link="https://x.io/a"), _tgv("Junior Data Analyst", "Ornis"),
+          _tgv("QA Engineer", "")]
+    board = [_site("Junior Data Analyst", "ORNIS"), _site("QA Engineer", ""), _site("Chef", "Foo")]
+    rows = audit_pairs(board, tg, "2026-10", {id(board[0])})
+    best = best_matches(board, tg)
+    best_rows = [r for r in rows if r["is_best"]]
+    assert len(best_rows) == len(best) == 2                                   # «Chef» не має жодного збігу — рядка немає
+    by_title = {r["site_title"]: r for r in best_rows}
+    assert by_title["Junior Data Analyst"]["tg_title"] == tg[best[0][0]]["title"]
+    assert by_title["Junior Data Analyst"]["level"] == "exact" and by_title["Junior Data Analyst"]["in_strict"] is True
+    assert by_title["QA Engineer"]["level"] == "title_only" and by_title["QA Engineer"]["counted_in"] == "high_only"
+    assert by_title["QA Engineer"]["company_sim"] == ""                      # компанії немає — оцінка не вигадується
+    assert all(r["verdict"] == "" for r in rows) and set(rows[0]) == set(__import__("tg_market.compare", fromlist=["x"]).AUDIT_FIELDS)
+
+
+def test_audit_scores_url_match_highest_and_flags_weak_fuzzy():
+    from tg_market.compare import audit_pairs
+    url = _tgv("Analyst", "A", url_key="x.io/1")
+    site_url = _site("Something else", "Z", url_key="x.io/1")
+    fuzzy_tg = _tgv("Data Analyst Python", "Ornis")
+    site_fz = _site("Data Analyst SQL Python", "ORNIS")
+    rows = audit_pairs([site_url, site_fz], [url, fuzzy_tg], "2026-10")
+    by = {r["site_title"]: r for r in rows}
+    assert by["Something else"]["level"] == "url" and by["Something else"]["score"] == 1.0
+    assert by["Data Analyst SQL Python"]["level"] == "fuzzy" and by["Data Analyst SQL Python"]["score"] < 1.0
+
+
+def test_score_audit_precision_by_level_with_interval_and_validation():
+    from tg_market.compare import score_audit, validate_verdicts
+    rows = [{"level": "exact", "is_best": "True", "verdict": v} for v in ["y"] * 9 + ["n"]]
+    rows += [{"level": "title_only", "is_best": "True", "verdict": v} for v in ["y", "n", "n", "n"]]
+    rows += [{"level": "exact", "is_best": "False", "verdict": "n"}, {"level": "fuzzy", "is_best": "True", "verdict": ""}]
+    res = {r["level"]: r for r in score_audit(rows)}
+    assert (res["exact"]["n_checked"], res["exact"]["n_correct"], res["exact"]["precision_pct"]) == (10, 9, 90.0)
+    assert res["exact"]["ci95_low_pct"] < 90 < res["exact"]["ci95_high_pct"]
+    assert res["title_only"]["precision_pct"] == 25.0 and res["fuzzy"]["n_checked"] == 0   # не-best і порожні — не рахуються
+    assert res["low+high (url/exact/fuzzy)"]["n_checked"] == 10
+    assert validate_verdicts([{"verdict": "так"}, {"verdict": "Y"}, {"verdict": ""}]) == ["рядок 2: verdict='так' (треба y або n)"]
+
+
+def test_wide_definition_is_shared_between_compare_and_monthly():
+    from tg_market import compare, monthly
+    assert compare.SITE_WIDE == monthly.WIDE == ("shown", "applied", "personal_reject")
+    assert compare.SITE_STRICT == ("shown", "applied")

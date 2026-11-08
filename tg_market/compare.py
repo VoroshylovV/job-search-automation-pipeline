@@ -20,6 +20,7 @@ import re
 import sys
 from collections import Counter, defaultdict
 from datetime import date, timedelta
+from difflib import SequenceMatcher
 from pathlib import Path
 
 from tg_market.analyze import DATA, OUT, SMALL_N, dedup, load, norm_company, norm_title, normalize_skills, reclassify
@@ -36,6 +37,13 @@ LEARNING_SKILLS = {"power bi"}                         # вивчає — не �
 REJECT_SKILLS = {"bpmn", "uml", "1c", "1с", "oracle", "oracle sql", "dax"}  # жорсткі стоп-вимоги
 EXCLUDED = re.compile(r"yandex|яндекс|mail\.ru|\bvk\b|вк\b|russia|росі|belarus|білорус|casino|казино|betting|"
                       r"гембл|gambl|букмекер|adult|forex|форекс|binary option", re.I)
+# Бази сайтів — єдине визначення для compare.py і monthly.py.
+#   strict = вакансії, які пайплайн показав або на які подано;
+#   wide   = strict + відсіяні за критеріями кандидата (роль/досвід/формат/ЗП/…, див. PERSONAL_CODES) і «майже підійшли».
+# Технічні відсіви (дубль, помилка, ліміт) не входять нікуди. Telegram-сторона: strict = вакансії після profile_reject,
+# wide = усі вакансії Telegram періоду (збіг із сайтами від профілю не залежить).
+SITE_STRICT = ("shown", "applied")
+SITE_WIDE = ("shown", "applied", "personal_reject")
 MATCH_WINDOW_DAYS = 30
 FUZZY_JACCARD = 0.6
 # Коди відсіву за критеріями кандидата (реальна вакансія, не підійшла саме йому) — потрапляють у широку базу.
@@ -248,6 +256,81 @@ def best_matches(left: list[dict], right: list[dict], left_is_tg: bool = False) 
     return out
 
 
+# ----------------------------------------------------------------------------- аудит збігів
+_LEVEL_ORDER = {"url": 3, "exact": 2, "fuzzy": 1, "title_only": 0}
+AUDIT_FIELDS = ["month", "level", "is_best", "counted_in", "site_status", "in_strict", "site_title", "site_company",
+                "site_url", "site_date", "tg_title", "tg_company", "tg_link", "tg_first_seen", "tg_channels",
+                "url_equal", "company_equal", "title_equal", "title_jaccard", "company_sim", "date_gap_days",
+                "score", "verdict", "note"]
+VERDICTS = {"y": True, "n": False}
+
+
+def company_similarity(a: str, b: str) -> float | None:
+    """1.0 — однакові або одна є початком іншої (≥4 знаків); інакше схожість ключів; None — компанії немає з боку."""
+    if not a or not b:
+        return None
+    if a == b or (min(len(a), len(b)) >= 4 and (a.startswith(b) or b.startswith(a))):
+        return 1.0
+    return round(SequenceMatcher(None, a, b).ratio(), 2)
+
+
+def pair_score(t: dict, b: dict) -> dict:
+    """Описова оцінка пари (НЕ ймовірність і не впливає на рішення про збіг): 0,6·схожість назв + 0,4·схожість компаній.
+    URL-збіг = 1.0. Потрібна, щоб при перевірці пар одразу бачити слабкі."""
+    url_eq = bool(t["url_key"]) and t["url_key"] == b["url_key"]
+    jac = round(jaccard(t["tokens"], b["tokens"]), 2)
+    comp = company_similarity(t["company_key"], b["company_key"])
+    score = 1.0 if url_eq else round(0.6 * jac + 0.4 * (comp or 0.0), 2)
+    return {"url_equal": url_eq, "title_equal": t["title_key"] == b["title_key"] or t["tokens"] == b["tokens"],
+            "title_jaccard": jac, "company_sim": "" if comp is None else comp,
+            "company_equal": comp == 1.0, "date_gap_days": abs((b["date"] - t["date"]).days), "score": score}
+
+
+def audit_pairs(board: list[dict], tg: list[dict], month: str, strict_ids: set[int] | None = None) -> list[dict]:
+    """Усі пари «вакансія сайту ↔ вакансія Telegram», які пройшли match_level, з ключами й оцінками.
+    is_best — пара, що реально рахується в покритті (та сама, яку обирає best_matches: найвищий рівень, при рівності
+    перша). counted_in: low+high для url/exact/fuzzy; high_only для title_only (лише верхня межа діапазону)."""
+    rows = []
+    for b in board:
+        cands = [(ti, t, lvl) for ti, t in enumerate(tg) if (lvl := match_level(t, b))]
+        if not cands:
+            continue
+        best_ti = max(cands, key=lambda c: (_LEVEL_ORDER[c[2]], -c[0]))[0]
+        for ti, t, lvl in cands:
+            sc = pair_score(t, b)
+            rows.append({
+                "month": month, "level": lvl, "is_best": ti == best_ti,
+                "counted_in": "low+high" if lvl != "title_only" else "high_only",
+                "site_status": b["status"], "in_strict": id(b) in (strict_ids or set()),
+                "site_title": b["title"], "site_company": b["company"], "site_url": b["url"], "site_date": b["date"],
+                "tg_title": t["title"], "tg_company": t["company"], "tg_link": t["link"],
+                "tg_first_seen": t["first_seen"], "tg_channels": t["channels"], **sc, "verdict": "", "note": ""})
+    rows.sort(key=lambda r: (-_LEVEL_ORDER[r["level"]], not r["is_best"], r["score"]))
+    return rows
+
+
+def validate_verdicts(rows: list[dict]) -> list[str]:
+    return [f"рядок {i}: verdict={r['verdict']!r} (треба y або n)"
+            for i, r in enumerate(rows, start=2) if r.get("verdict", "").strip() and r["verdict"].strip().lower() not in VERDICTS]
+
+
+def score_audit(rows: list[dict]) -> list[dict]:
+    """Точність зіставлення за ручною розміткою: частка пар (is_best) з verdict=y по рівнях збігу, з 95% інтервалом Вілсона."""
+    from tg_market.gold import wilson
+    best = [r for r in rows if str(r.get("is_best")) == "True" and r.get("verdict", "").strip().lower() in VERDICTS]
+    groups = {lvl: [r for r in best if r["level"] == lvl] for lvl in _LEVEL_ORDER}
+    groups["low+high (url/exact/fuzzy)"] = [r for r in best if r["level"] != "title_only"]
+    out = []
+    for name, items in groups.items():
+        n = len(items)
+        k = sum(1 for r in items if VERDICTS[r["verdict"].strip().lower()])
+        lo, hi = wilson(k, n)
+        out.append({"level": name, "n_checked": n, "n_correct": k,
+                    "precision_pct": round(100 * k / n, 1) if n else None,
+                    "ci95_low_pct": round(100 * lo, 1) if n else None, "ci95_high_pct": round(100 * hi, 1) if n else None})
+    return out
+
+
 def rng(hit_low: int, hit_high: int, n: int) -> str:
     if not n:
         return "—"
@@ -287,8 +370,8 @@ def run(month: str, logs: Path) -> dict:
 
     board, results, tg_pipeline_rows = load_board(logs, start, end)
     tg = load_tg(start, end)
-    strict = [b for b in board if b["status"] in ("shown", "applied")]
-    wide = [b for b in board if b["status"] in ("shown", "applied", "personal_reject")]
+    strict = [b for b in board if b["status"] in SITE_STRICT]
+    wide = [b for b in board if b["status"] in SITE_WIDE]
 
     # покриття: чи є вакансія із сайтів серед УСІХ Telegram-вакансій періоду (профіль не впливає на збіг)
     def coverage(base):
@@ -352,17 +435,32 @@ def run(month: str, logs: Path) -> dict:
                                             for i, b in enumerate(strict) if i not in m_strict])
     write_csv("compare_tg_exclusive.csv", [{"посада": u["title"], "компанія": u["company"], "дата": u["first_seen"], "канали": u["channels"], "посилання": u["link"]}
                                            for i, u in enumerate(fit) if i not in tg_vs_board])
+    audit = audit_pairs(wide, tg, month, {id(b) for b in strict})
+    write_csv("compare_match_audit.csv", audit)
     write_csv("compare_matches.csv", [{"сайт": strict[i]["title"] + " — " + strict[i]["company"], "telegram": tg[j]["title"] + " — " + tg[j]["company"], "рівень": lvl}
                                       for i, (j, lvl) in sorted(m_strict.items())])
     return {"summary": summary, "funnel": funnel, "skills": skills, "by_dir": by_dir, "results": results,
-            "tg_pipeline_rows": tg_pipeline_rows, "period": (start, end)}
+            "tg_pipeline_rows": tg_pipeline_rows, "period": (start, end), "audit": audit}
 
 
 def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--month", default=previous_month(date.today()), help="YYYY-MM (за замовчуванням — попередній місяць)")
     ap.add_argument("--logs", default=str(Path(__file__).resolve().parent.parent / "logs"), help="каталог logs/ пайплайну")
+    ap.add_argument("--score-audit", metavar="CSV", help="оцінити точність зіставлення за ручним verdict (y/n) у compare_match_audit.csv")
     args = ap.parse_args()
+    if args.score_audit:
+        with open(args.score_audit, encoding="utf-8-sig", newline="") as f:
+            rows = list(csv.DictReader(f))
+        errs = validate_verdicts(rows)
+        if errs:
+            sys.exit("Помилки в розмітці:\n  " + "\n  ".join(errs[:30]))
+        res = score_audit(rows)
+        for r in res:
+            print(f"  {r['level']:<28} n={r['n_checked']:<4} правильних {r['n_correct']:<4} "
+                  f"{r['precision_pct']}% [{r['ci95_low_pct']}–{r['ci95_high_pct']}]")
+        write_csv("compare_match_precision.csv", res)
+        return
     logs = Path(args.logs)
     if not logs.is_dir() or not (DATA / "vacancies.csv").exists():
         sys.exit(f"Потрібні: каталог логів ({logs}) і {DATA / 'vacancies.csv'} (спершу tg_market.collect)")
@@ -378,6 +476,9 @@ def main() -> None:
     print("Значення «Результат/Причина» у логах (перевір, що класифікація статусів коректна):")
     for (a, b), n in res["results"].most_common(12):
         print(f"  {a or '—'} / {b or '—'}: {n}")
+    best = [r for r in res["audit"] if r["is_best"]]
+    print(f"Аудит збігів: {len(best)} пар у покритті ({Counter(r['level'] for r in best).most_common()}); "
+          f"перевір вибірково compare_match_audit.csv (стовпець verdict y/n), далі --score-audit")
     print(f"\nФайли: {OUT}/compare_*.csv")
 
 
