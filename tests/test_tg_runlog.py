@@ -147,3 +147,33 @@ def test_collect_main_logs_failed_run_with_spent_tokens(tmp_path, monkeypatch):
     runs = _rows(tmp_path / "runs.csv")
     assert runs[0]["status"] == "failed" and runs[0]["input_tokens"] == "500"
     assert (tmp_path / "raw" / "ch.jsonl").exists()                    # текст збережено попри збій
+
+
+def test_backfill_raw_saves_text_only_for_known_posts_and_touches_nothing_else(tmp_path, monkeypatch):
+    import sys
+
+    import tg_market.collect as col
+
+    (tmp_path / "posts.csv").write_text(
+        "channel,post_id\nch,1\nch,2\nch,3\n", encoding="utf-8")            # 3 уже оброблені, 3-й видалено з каналу
+    before = (tmp_path / "posts.csv").read_text(encoding="utf-8")
+    monkeypatch.setattr(col, "DATA", tmp_path)
+    monkeypatch.setattr(col, "load_channels", lambda panel: [{"handle": "ch", "panel": "core", "max_pages": "1"}])
+    monkeypatch.setattr(col, "get_session", lambda: object())
+    seen = {}
+
+    def fake_fetch(session, handle, since, min_id, max_pages):
+        seen["min_id"] = min_id
+        return [Post("ch", 1, "2026-09-01T00:00:00+00:00", 1, "Текст 1"), Post("ch", 2, "2026-09-02T00:00:00+00:00", 1, "Текст 2"),
+                Post("ch", 9, "2026-11-01T00:00:00+00:00", 1, "Новий, ще не оброблений")]
+
+    monkeypatch.setattr(col, "fetch_channel", fake_fetch)
+    monkeypatch.setattr(col, "call_json", lambda *a, **k: pytest.fail("Claude не має викликатись"))
+    monkeypatch.setattr(sys, "argv", ["collect", "--since", "2026-08-01", "--backfill-raw"])
+    col.main()
+
+    assert seen["min_id"] == 0                                           # state.json ігнорується
+    ids = [json.loads(x)["post_id"] for x in (tmp_path / "raw" / "ch.jsonl").read_text(encoding="utf-8").splitlines()]
+    assert ids == [1, 2]                                                 # пост 9 не в posts.csv — його не чіпаємо
+    assert (tmp_path / "posts.csv").read_text(encoding="utf-8") == before
+    assert not (tmp_path / "runs.csv").exists() and not (tmp_path / "state.json").exists()

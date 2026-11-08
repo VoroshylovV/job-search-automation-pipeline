@@ -2,6 +2,7 @@
 
     python -m tg_market.collect --since 2026-08-01            # основна панель
     python -m tg_market.collect --since 2026-08-01 --panel all
+    python -m tg_market.collect --since 2026-08-01 --panel all --backfill-raw   # один раз: текст уже зібраних постів
 
 Результат (у tg_market/data/, поза git):
     runs.csv       — один рядок на запуск: модель, версія промпта, пости, токени, вартість
@@ -102,6 +103,36 @@ def append_csv(path: Path, fields: list[str], rows: list[dict]) -> None:
     runlog.append_csv(path, fields, rows)
 
 
+def backfill_raw(session, channels: list[dict], since: datetime, state: dict, data: Path) -> dict:
+    """Дозбирає сирий текст для постів, які вже є в posts.csv (зібрані до появи raw/).
+    Без Claude, без змін posts/vacancies/state/runs: лише raw/<канал>.jsonl. Повертає звіт по каналах:
+    скільки збережено і скількох постів із posts.csv у стрічці вже немає (видалені)."""
+    known: dict[str, set[int]] = {}
+    posts_csv = data / "posts.csv"
+    if posts_csv.exists():
+        with open(posts_csv, encoding="utf-8-sig", newline="") as f:
+            for r in csv.DictReader(f):
+                known.setdefault(r["channel"], set()).add(int(r["post_id"]))
+    report = {}
+    for ch in channels:
+        handle = ch["handle"]
+        want = known.get(handle, set())
+        if not want:
+            continue
+        try:
+            posts = fetch_channel(session, handle, since, 0, int(ch.get("max_pages") or 40))
+        except ScraperError as exc:
+            logger.warning("%s: недоступний (%s)", handle, exc)
+            report[handle] = {"saved": 0, "missing": len(want), "error": str(exc)}
+            continue
+        got = [p for p in posts if p.post_id in want]
+        saved = runlog.save_raw(data / "raw", "backfill", got)
+        report[handle] = {"saved": saved, "missing": len(want) - len({p.post_id for p in got})}
+        logger.info("%s: дозбір тексту — збережено %d, у стрічці немає %d з %d", handle, saved,
+                    report[handle]["missing"], len(want))
+    return report
+
+
 def _token_totals() -> dict:
     sts = tracker.stages.values()
     return {"calls": sum(st.calls for st in sts), "input": sum(st.input_tokens for st in sts),
@@ -115,6 +146,8 @@ def main() -> None:
     ap.add_argument("--panel", default="core", choices=["core", "secondary", "reference", "all"])
     ap.add_argument("--channel", help="лише один канал (для перевірки)")
     ap.add_argument("--dry-run", action="store_true", help="лише зібрати й порахувати пости, без Claude і без запису")
+    ap.add_argument("--backfill-raw", action="store_true",
+                    help="дозібрати лише сирий текст уже оброблених постів (без Claude, без змін CSV і state.json)")
     args = ap.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
@@ -125,6 +158,13 @@ def main() -> None:
     channels = load_channels(args.panel)
     if args.channel:
         channels = [c for c in channels if c["handle"] == args.channel] or [{"handle": args.channel, "max_pages": "40"}]
+
+    if args.backfill_raw:
+        report = backfill_raw(get_session(), channels, since, state, DATA)
+        total_saved = sum(r["saved"] for r in report.values())
+        total_missing = sum(r["missing"] for r in report.values())
+        logger.info("дозбір тексту: збережено %d постів, у стрічці вже немає %d", total_saved, total_missing)
+        return
 
     prev = runlog.previous_since(DATA / "runs.csv")
     if prev and prev != args.since and not args.dry_run:
