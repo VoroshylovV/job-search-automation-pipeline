@@ -75,27 +75,27 @@ def fetch_channel(session, handle: str, since: datetime, min_id: int, max_pages:
     return sorted({p.post_id: p for p in out}.values(), key=lambda p: p.post_id)
 
 
-def _classify_chunk(chunk: list[Post], result: dict[str, dict]) -> None:
+def _classify_chunk(chunk: list[Post], result: dict[str, dict], model: str | None = None) -> None:
     """Якщо відповідь обірвалась (невалідний JSON) — ділимо порцію навпіл.
     Один пост, який не вдалося розібрати, пропускаємо з позначкою, а не валимо весь запуск."""
     try:
-        data = call_json(build_prompt(chunk), max_tokens=16000, model=TG_MARKET_MODEL)
+        data = call_json(build_prompt(chunk), max_tokens=16000, model=model or TG_MARKET_MODEL)
     except ClaudeCallError as exc:
         if len(chunk) == 1:
             logger.warning("%s/%s: не вдалося розібрати (%s) — пропущено", chunk[0].channel, chunk[0].post_id, exc)
             return
         mid = len(chunk) // 2
-        _classify_chunk(chunk[:mid], result)
-        _classify_chunk(chunk[mid:], result)
+        _classify_chunk(chunk[:mid], result, model)
+        _classify_chunk(chunk[mid:], result, model)
         return
     for item in data.get("posts", []):
         result[str(item.get("key"))] = item
 
 
-def classify(posts: list[Post]) -> dict[str, dict]:
+def classify(posts: list[Post], model: str | None = None) -> dict[str, dict]:
     result: dict[str, dict] = {}
     for i in range(0, len(posts), CHUNK):
-        _classify_chunk(posts[i:i + CHUNK], result)
+        _classify_chunk(posts[i:i + CHUNK], result, model)
     return result
 
 
