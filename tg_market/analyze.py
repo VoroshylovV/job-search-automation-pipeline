@@ -18,7 +18,8 @@ from pathlib import Path
 
 from tg_market.classify import NON_IT_DIRECTIONS
 
-DATA = Path(__file__).parent / "data"
+BASE = Path(__file__).parent
+DATA = BASE / "data"
 OUT = DATA / "out"
 DEDUP_WINDOW_DAYS = 30
 SMALL_N = 30
@@ -206,6 +207,37 @@ def channel_metrics(posts: list[dict], mentions: list[dict], uniques: list[dict]
     return out
 
 
+def load_orientation(path: Path | None = None) -> dict[str, str]:
+    """handle → junior | general (колонка orientation у channels.csv; без неї — general)."""
+    with open(path or BASE / "channels.csv", encoding="utf-8") as f:
+        return {r["handle"]: (r.get("orientation") or "general") for r in csv.DictReader(f)}
+
+
+def orientation_group(u: dict, orient: dict[str, str]) -> str:
+    """general — вакансія зустрілась хоча б в одному каналі без орієнтації на junior;
+    junior-only — лише в junior-орієнтованих. Частка junior серед general — знаменник проти зміщення панелі."""
+    chans = [c for c in u["channels"].split("; ") if c]
+    return "general" if any(orient.get(c, "general") == "general" for c in chans) else "junior-only"
+
+
+def control_group(uniques: list[dict], orient: dict[str, str]) -> tuple[list[dict], list[dict]]:
+    it = [u for u in uniques if u["is_it"] == "True"]
+    group = lambda u: orientation_group(u, orient)  # noqa: E731
+    levels = shares(it, group, lambda u: u["level"])
+    summary = []
+    for g in ("general", "junior-only"):
+        items = [u for u in it if group(u) == g]
+        n = len(items)
+        jr = sum(1 for u in items if u["level"] in ("intern", "junior"))
+        explicit = sum(1 for u in items if u["level"] != "unspecified")
+        summary.append({"group": g, "n_it_unique": n, "junior_intern_n": jr,
+                        "junior_share_of_all_pct": round(100 * jr / n, 1) if n else None,
+                        "n_level_stated": explicit,
+                        "junior_share_of_stated_pct": round(100 * jr / explicit, 1) if explicit else None,
+                        "small_sample": n < SMALL_N})
+    return summary, levels
+
+
 def write(name: str, rows: list[dict]) -> None:
     OUT.mkdir(parents=True, exist_ok=True)
     if not rows:
@@ -244,7 +276,13 @@ def main() -> None:
             skill_rows.append({"direction": d, "skill": s, "share_pct": round(100 * c / n, 1), "n": n,
                                "n_with_skills": n_sk, "small_sample": n < SMALL_N})
     write("skills_by_direction.csv", skill_rows)
+    summary, lvl = control_group(uniques, load_orientation())
+    write("control_group_junior.csv", summary)
+    write("control_group_level.csv", lvl)
     print(f"згадок: {len(mentions)} → унікальних вакансій: {len(uniques)} (IT: {len(it)}); результати в {OUT}")
+    for r in summary:
+        print(f"контроль [{r['group']}]: n={r['n_it_unique']}, junior/intern {r['junior_share_of_all_pct']}% від усіх, "
+              f"{r['junior_share_of_stated_pct']}% від вакансій з вказаним рівнем")
     if fixes:
         print("детерміновані правки класифікації:", dict(fixes))
     if it_w:
