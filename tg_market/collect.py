@@ -4,9 +4,14 @@
     python -m tg_market.collect --since 2026-08-01 --panel all
 
 Результат (у tg_market/data/, поза git):
+    runs.csv       — один рядок на запуск: модель, версія промпта, пости, токени, вартість
     posts.csv      — рівень поста: канал, id, дата, перегляди, чи вакансія, скільки вакансій
     vacancies.csv  — рівень вакансії: витягнуті поля (без тексту поста й контактів)
+    raw/<канал>.jsonl — повний текст постів (лише на диску: не в таблицях і не на Drive)
     state.json     — останній оброблений post_id по каналу (повторний запуск бере лише нове)
+
+Ритм: один запуск на місяць із сталим --since (наприклад 2026-08-01); state.json
+не дає брати старе вдруге. Значення --since записується в runs.csv.
 """
 from __future__ import annotations
 
@@ -20,8 +25,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from claude_orchestrator.client import ClaudeCallError, call_json
+from claude_orchestrator.cost import tracker
 from scrapers.base import ScraperError, fetch, get_session
-from tg_market.classify import build_prompt, normalize_vacancy
+from tg_market import runlog
+from tg_market.classify import PROMPT, build_prompt, normalize_vacancy
 from tg_market.parse import Post, parse_page
 
 logger = logging.getLogger("tg_market")
@@ -33,10 +40,8 @@ PAUSE_SECONDS = 1.5  # ввічлива пауза між сторінками t
 # Перебити можна змінною TG_MARKET_MODEL у .env.
 TG_MARKET_MODEL = os.environ.get("TG_MARKET_MODEL", "claude-haiku-5-5")
 
-POST_FIELDS = ["channel", "post_id", "datetime", "views", "classified", "is_vacancy", "vacancy_count", "collected_at"]
-VAC_FIELDS = ["channel", "post_id", "datetime", "vacancy_idx", "title", "company", "is_it", "direction",
-              "level", "experience_years_min", "skills", "work_format", "remote_scope", "salary_stated",
-              "salary_min", "salary_max", "salary_currency", "salary_period", "link"]
+POST_FIELDS = runlog.POST_FIELDS
+VAC_FIELDS = runlog.VAC_FIELDS
 
 
 def load_channels(panel: str) -> list[dict]:
@@ -94,12 +99,14 @@ def classify(posts: list[Post]) -> dict[str, dict]:
 
 
 def append_csv(path: Path, fields: list[str], rows: list[dict]) -> None:
-    new = not path.exists()
-    with open(path, "a", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=fields)
-        if new:
-            w.writeheader()
-        w.writerows(rows)
+    runlog.append_csv(path, fields, rows)
+
+
+def _token_totals() -> dict:
+    sts = tracker.stages.values()
+    return {"calls": sum(st.calls for st in sts), "input": sum(st.input_tokens for st in sts),
+            "output": sum(st.output_tokens for st in sts), "cache_read": sum(st.cache_read_tokens for st in sts),
+            "cache_write": sum(st.cache_write_tokens for st in sts)}
 
 
 def main() -> None:
@@ -119,35 +126,70 @@ def main() -> None:
     if args.channel:
         channels = [c for c in channels if c["handle"] == args.channel] or [{"handle": args.channel, "max_pages": "40"}]
 
-    session = get_session()
-    collected_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    for ch in channels:
-        handle = ch["handle"]
-        try:
-            posts = fetch_channel(session, handle, since, int(state.get(handle, 0)), int(ch.get("max_pages") or 40))
-        except ScraperError as exc:
-            logger.warning("%s: недоступний (%s)", handle, exc)
-            continue
-        span = f"{posts[0].datetime[:10]} … {posts[-1].datetime[:10]}" if posts else "—"
-        logger.info("%s: %d нових постів (%s)", handle, len(posts), span)
-        if args.dry_run or not posts:
-            continue
+    prev = runlog.previous_since(DATA / "runs.csv")
+    if prev and prev != args.since and not args.dry_run:
+        logger.warning("--since %s відрізняється від попереднього запуску (%s): місяці порівнюються лише при сталому --since",
+                       args.since, prev)
 
-        parsed = classify(posts)
-        post_rows, vac_rows = [], []
-        for p in posts:
-            key = f"{handle}/{p.post_id}"
-            item = parsed.get(key, {})
-            vacs = [normalize_vacancy(v) for v in (item.get("vacancies") or [])] if item.get("is_vacancy") else []
-            post_rows.append({"channel": handle, "post_id": p.post_id, "datetime": p.datetime, "views": p.views,
-                              "classified": key in parsed, "is_vacancy": bool(vacs), "vacancy_count": len(vacs), "collected_at": collected_at})
-            for idx, v in enumerate(vacs):
-                vac_rows.append({"channel": handle, "post_id": p.post_id, "datetime": p.datetime, "vacancy_idx": idx, **v})
-        append_csv(DATA / "posts.csv", POST_FIELDS, post_rows)
-        append_csv(DATA / "vacancies.csv", VAC_FIELDS, vac_rows)
-        state[handle] = posts[-1].post_id
-        state_path.write_text(json.dumps(state, indent=2), encoding="utf-8")
-        logger.info("%s: записано %d постів, %d вакансій", handle, len(post_rows), len(vac_rows))
+    tracker.reset()
+    run_id = runlog.new_run_id()
+    started_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    totals = {"posts": 0, "classified": 0, "vacancy_posts": 0, "vacancies": 0}
+    done_channels: list[str] = []
+    status = "ok"
+
+    session = get_session()
+    collected_at = started_at
+    try:
+        for ch in channels:
+            handle = ch["handle"]
+            try:
+                posts = fetch_channel(session, handle, since, int(state.get(handle, 0)), int(ch.get("max_pages") or 40))
+            except ScraperError as exc:
+                logger.warning("%s: недоступний (%s)", handle, exc)
+                status = "partial"
+                continue
+            span = f"{posts[0].datetime[:10]} … {posts[-1].datetime[:10]}" if posts else "—"
+            logger.info("%s: %d нових постів (%s)", handle, len(posts), span)
+            if args.dry_run or not posts:
+                continue
+
+            runlog.save_raw(DATA / "raw", run_id, posts)   # текст зберігаємо до класифікації: збій Claude його не губить
+            parsed = classify(posts)
+            post_rows, vac_rows = [], []
+            for p in posts:
+                key = f"{handle}/{p.post_id}"
+                item = parsed.get(key, {})
+                vacs = [normalize_vacancy(v) for v in (item.get("vacancies") or [])] if item.get("is_vacancy") else []
+                post_rows.append({"run_id": run_id, "channel": handle, "post_id": p.post_id, "datetime": p.datetime,
+                                  "views": p.views, "classified": key in parsed, "is_vacancy": bool(vacs),
+                                  "vacancy_count": len(vacs), "collected_at": collected_at})
+                for idx, v in enumerate(vacs):
+                    vac_rows.append({"run_id": run_id, "channel": handle, "post_id": p.post_id,
+                                     "datetime": p.datetime, "vacancy_idx": idx, **v})
+            append_csv(DATA / "posts.csv", POST_FIELDS, post_rows)
+            append_csv(DATA / "vacancies.csv", VAC_FIELDS, vac_rows)
+            state[handle] = posts[-1].post_id
+            state_path.write_text(json.dumps(state, indent=2), encoding="utf-8")
+            done_channels.append(handle)
+            totals["posts"] += len(post_rows)
+            totals["classified"] += sum(1 for r in post_rows if r["classified"])
+            totals["vacancy_posts"] += sum(1 for r in post_rows if r["is_vacancy"])
+            totals["vacancies"] += len(vac_rows)
+            logger.info("%s: записано %d постів, %d вакансій", handle, len(post_rows), len(vac_rows))
+    except BaseException:
+        status = "failed"
+        raise
+    finally:
+        if not args.dry_run and (totals["posts"] or status == "failed"):
+            row = runlog.build_run_row(
+                run_id=run_id, started_at=started_at, since=args.since, panel=args.channel and "channel" or args.panel,
+                channels=done_channels, model=TG_MARKET_MODEL, prompt_text=PROMPT, posts=totals["posts"],
+                classified=totals["classified"], vacancy_posts=totals["vacancy_posts"], vacancies=totals["vacancies"],
+                tokens=_token_totals(), cost_usd=tracker.total_usd, status=status)
+            append_csv(DATA / "runs.csv", runlog.RUN_FIELDS, [row])
+            logger.info("run %s: %d постів, $%.4f ($%s за 1000), runs.csv оновлено", run_id, totals["posts"],
+                        tracker.total_usd, row["cost_per_1000_posts_usd"])
 
 
 if __name__ == "__main__":

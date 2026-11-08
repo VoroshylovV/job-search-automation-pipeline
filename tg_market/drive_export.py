@@ -5,9 +5,9 @@
 
 Куди: файл «TG-ринок: дані збору YYYY-MM» у папці Drive, ID якої задано змінною
 TG_MARKET_DRIVE_FOLDER_ID у .env (папку створи сам; без змінної модуль нічого не робить).
-Що: аркуші posts, vacancies (tg_market/data/) та всі out/*.csv (analyze, compare, monthly).
+Що: аркуші runs, posts, vacancies (tg_market/data/) та всі out/*.csv (analyze, compare, monthly).
 Повторний запуск у тому самому місяці перезаписує вміст аркушів того ж файлу.
-Тексти постів і контакти не вивантажуються — їх немає і в самих CSV.
+Сирі тексти постів (data/raw/) і контакти не вивантажуються — їх немає в CSV.
 Після запису кожний аркуш читається назад, кількість рядків звіряється.
 """
 from __future__ import annotations
@@ -23,7 +23,7 @@ from pathlib import Path
 from tg_market.analyze import DATA, OUT
 
 FOLDER_ENV = "TG_MARKET_DRIVE_FOLDER_ID"
-RAW_FILES = ("posts.csv", "vacancies.csv")
+RAW_FILES = ("runs.csv", "posts.csv", "vacancies.csv")
 CHUNK_ROWS = 2000
 SHEET_NAME_MAX = 100
 _NUM = re.compile(r"^[+-]?\d+([.,]\d+)?$")

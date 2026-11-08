@@ -16,6 +16,8 @@ from collections import Counter, defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
 
+from tg_market.classify import NON_IT_DIRECTIONS
+
 DATA = Path(__file__).parent / "data"
 OUT = DATA / "out"
 DEDUP_WINDOW_DAYS = 30
@@ -120,6 +122,9 @@ def reclassify(u: dict) -> str | None:
     if u["direction"] == "analytics" and _NON_DATA_ANALYST.search(t):
         u["is_it"], u["direction"] = "False", "non-it"
         return "non-data-analyst→non-it"
+    if u["direction"] in NON_IT_DIRECTIONS and u["is_it"] == "True":
+        u["is_it"] = "False"                 # старі рядки, записані до фіксації is_it при записі
+        return "marketing/non-it is_it→False"
     return None
 
 
