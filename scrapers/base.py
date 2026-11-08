@@ -122,11 +122,22 @@ def age_days(posted_raw: str, today: _date) -> Optional[int]:
     m = _re.match(r"(\d{4})-(\d{2})-(\d{2})", t)
     if m:
         return (today - _date(int(m[1]), int(m[2]), int(m[3]))).days
-    if "сьогодні" in t or "today" in t or "годин" in t or "хвилин" in t or "hour" in t:
+    if ("сьогодні" in t or "today" in t or "годин" in t or "хвилин" in t or "hour" in t
+            or "щойно" in t or "just now" in t):
         return 0
     if "вчора" in t or "yesterday" in t:
         return 1
-    m = _re.search(r"(\d+)\s*(дн|день|day)", t)
+    # Відносний час Djinni («updated 10h ago», «оновлено 3 дн. тому»): компактні
+    # одиниці EN/UA — хвилини, години (→ 0 днів), дні, тижні, місяці.
+    if _re.search(r"\d+\s*(min|хв|год|m\b|h\b)", t):
+        return 0
+    m = _re.search(r"(\d+)\s*(міс|month|mo\b)", t)
+    if m:
+        return int(m[1]) * 30
+    m = _re.search(r"(\d+)\s*(тиж|week|w\b)", t)
+    if m:
+        return int(m[1]) * 7
+    m = _re.search(r"(\d+)\s*(дн|день|day|d\b)", t)
     if m:
         return int(m[1])
     m = _re.search(r"(\d{1,2})\s+([а-яіїєґ]+)(?:\s+(\d{4}))?", t)
