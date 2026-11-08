@@ -22,6 +22,7 @@ from bs4 import BeautifulSoup
 
 from models import RawJobPosting
 from scrapers.base import ScraperError, fetch, get_session
+from scrapers.djinni import parse_published_date
 
 logger = logging.getLogger(__name__)
 
@@ -120,7 +121,16 @@ def fetch_full_text(job: RawJobPosting) -> str | None:
         if job.source == "robota.ua":
             text = _robota_full_text(session, job.url)
         else:
-            text = _html_to_text(fetch(session, job.url).text, job.source)
+            html = fetch(session, job.url).text
+            text = _html_to_text(html, job.source)
+            if job.source == "djinni.co":
+                # Картка djinni не має дати публікації — беремо з цього ж HTML
+                # (JSON-LD datePosted / «Published D Month»), без окремого запиту.
+                published = parse_published_date(html)
+                if published is not None:
+                    text = f"Дата публікації: {published.isoformat()} | {text}"
+                else:
+                    logger.warning("djinni.co: дату публікації не знайдено на сторінці %s", job.url)
     except (ScraperError, ValueError) as exc:
         # Текст помилки може містити сире API-посилання robota.ua — у лог не йде.
         detail = "помилка API" if job.source == "robota.ua" else exc
