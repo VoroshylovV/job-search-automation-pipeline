@@ -177,3 +177,21 @@ def test_backfill_raw_saves_text_only_for_known_posts_and_touches_nothing_else(t
     assert ids == [1, 2]                                                 # пост 9 не в posts.csv — його не чіпаємо
     assert (tmp_path / "posts.csv").read_text(encoding="utf-8") == before
     assert not (tmp_path / "runs.csv").exists() and not (tmp_path / "state.json").exists()
+
+
+def test_control_group_denominator_uses_general_channels(tmp_path):
+    from tg_market.analyze import control_group, load_orientation
+    ch = tmp_path / "channels.csv"
+    ch.write_text("handle,panel,max_pages,orientation\nj,core,40,junior\ng,core,40,general\nold,core,40,\n", encoding="utf-8")
+    orient = load_orientation(ch)
+    assert orient == {"j": "junior", "g": "general", "old": "general"}      # без значення — general
+    u = lambda chans, level: {"is_it": "True", "channels": chans, "level": level}  # noqa: E731
+    uniques = [u("j", "junior"), u("j", "junior"), u("j; g", "junior"), u("g", "senior"), u("g", "middle"),
+               u("g", "unspecified"), {"is_it": "False", "channels": "g", "level": "junior"}]
+    summary, levels = control_group(uniques, orient)
+    gen = next(r for r in summary if r["group"] == "general")
+    only = next(r for r in summary if r["group"] == "junior-only")
+    assert gen["n_it_unique"] == 4 and gen["junior_intern_n"] == 1            # «j; g» потрапляє в general
+    assert gen["junior_share_of_all_pct"] == 25.0 and gen["junior_share_of_stated_pct"] == 33.3
+    assert only["n_it_unique"] == 2 and only["junior_share_of_all_pct"] == 100.0
+    assert {r["group"] for r in levels} == {"general", "junior-only"}
