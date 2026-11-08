@@ -52,12 +52,19 @@ def _norm(value, allowed, default):
     return v if v in allowed else default
 
 
+# Напрями, які за визначенням не IT: прапорець is_it фіксується при записі, щоб
+# «IT-вакансій» не мало двох чисел залежно від того, де рахувати (marketing 16 шт. раніше лишались is_it=True).
+NON_IT_DIRECTIONS = {"marketing", "non-it"}
+
+
 def normalize_vacancy(v: dict) -> dict:
+    direction = _norm(v.get("direction"), DIRECTIONS, "other-it" if v.get("is_it") else "non-it")
+    is_it = bool(v.get("is_it")) and direction not in NON_IT_DIRECTIONS
     return {
         "title": (v.get("title") or "").strip(),
         "company": (v.get("company") or "").strip(),
-        "is_it": bool(v.get("is_it")),
-        "direction": _norm(v.get("direction"), DIRECTIONS, "other-it" if v.get("is_it") else "non-it"),
+        "is_it": is_it,
+        "direction": direction,
         "level": _norm(v.get("level"), LEVELS, "unspecified"),
         "experience_years_min": v.get("experience_years_min"),
         "skills": "; ".join(s.strip() for s in (v.get("skills") or []) if isinstance(s, str) and s.strip()),
