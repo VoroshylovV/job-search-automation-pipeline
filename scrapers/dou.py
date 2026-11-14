@@ -35,10 +35,12 @@ LISTING_URL = f"{BASE_URL}/vacancies/"
 PARAMS_LIST = [
     {"category": "Analyst", "remote": "", "exp": "0-1"},
     {"category": "Analyst", "remote": "", "exp": "1-3"},
-    # Правило И п.3 і п.8 (18.10.2026): окремі пошуки «data analyst», «AI»,
+    # Правило И п.3 і п.8 (18.10.2026): окремі пошуки «data analyst», «AI analyst»,
     # «CRM analyst» (remote) — частина вакансій на DOU не в категорії Analyst.
+    # 14.11.2026 (Правило Щ п.4): «AI» -> «AI analyst». Запит «AI» без слова
+    # analyst повертав інженерні вакансії поза профілем (10.11: 20 з 64 карток DOU).
     {"search": "data analyst", "remote": ""},
-    {"search": "AI", "remote": ""},
+    {"search": "AI analyst", "remote": ""},
     {"search": "CRM analyst", "remote": ""},
 ]
 
