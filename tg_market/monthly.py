@@ -116,7 +116,10 @@ def main() -> None:
     write_csv("monthly_tg_vs_repo.csv", cmp_out)
     print(f"\nМала вибірка: n<{SMALL_N}. Сайти: напрям за евристикою назви; "
           "wide = показані+подані+відсіяні за роль/досвід/формат/ЗП.")
-    print("Місяць репо без даних = логів ще не було (reject-лог з 27.09, локальні з 26.10). Листопад неповний.")
+    print("Місяць репо без даних = логів ще не було (reject-лог з 27.09, локальні з 26.10).")
+    last_day = date(end.year, end.month, monthrange(end.year, end.month)[1])
+    if end < last_day:
+        print(f"Місяць {ym(end)} неповний: дані лише до {end:%d.%m.%Y} — не порівнюй його з повними місяцями.")
 
 
 if __name__ == "__main__":

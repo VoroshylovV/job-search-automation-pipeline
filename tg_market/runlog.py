@@ -18,7 +18,7 @@ import subprocess
 from datetime import datetime, timezone
 from pathlib import Path
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 SOURCE = "telegram"  # ключ джерела: окремий від сайтів вакансій у спільних звітах
 
 POST_FIELDS = ["run_id", "channel", "post_id", "datetime", "views", "classified", "is_vacancy",
@@ -30,7 +30,8 @@ RUN_FIELDS = ["run_id", "source", "schema_version", "started_at", "finished_at",
               "channels", "model", "prompt_hash", "git_hash", "git_dirty", "posts", "classified_posts",
               "vacancy_posts", "vacancies", "api_calls", "input_tokens", "output_tokens",
               "cache_read_tokens", "cache_write_tokens", "cost_usd", "cost_per_post_usd",
-              "cost_per_1000_posts_usd", "status"]
+              "cost_per_1000_posts_usd", "unclassified_posts", "problem_channels", "budget_limit_usd", "status"]
+PENDING_FILE = "pending.json"
 
 
 def new_run_id(now: datetime | None = None) -> str:
@@ -99,7 +100,8 @@ def previous_since(path: Path) -> str | None:
 
 def build_run_row(*, run_id: str, started_at: str, since: str, panel: str, channels: list[str], model: str,
                   prompt_text: str, posts: int, classified: int, vacancy_posts: int, vacancies: int,
-                  tokens: dict, cost_usd: float, status: str, git: tuple[str, bool] | None = None) -> dict:
+                  tokens: dict, cost_usd: float, status: str, git: tuple[str, bool] | None = None,
+                  problems: list[str] | None = None, budget_limit: float | None = None) -> dict:
     git_hash, dirty = git or git_info()
     return {
         "run_id": run_id, "source": SOURCE, "schema_version": SCHEMA_VERSION, "started_at": started_at,
@@ -112,6 +114,9 @@ def build_run_row(*, run_id: str, started_at: str, since: str, panel: str, chann
         "cost_usd": round(cost_usd, 4),
         "cost_per_post_usd": round(cost_usd / posts, 6) if posts else "",
         "cost_per_1000_posts_usd": round(1000 * cost_usd / posts, 3) if posts else "",
+        "unclassified_posts": posts - classified,
+        "problem_channels": " | ".join(problems or []),
+        "budget_limit_usd": "" if budget_limit is None else budget_limit,
         "status": status,
     }
 
@@ -143,3 +148,59 @@ def save_raw(raw_dir: Path, run_id: str, posts) -> int:
                                    ensure_ascii=False) + "\n")
                 written += 1
     return written
+
+
+# ----------------------------------------------------------------------------- захист запису каналу від падіння
+# Запис одного каналу — це три файли (vacancies.csv, posts.csv, state.json). Якщо процес упаде між ними,
+# повторний запуск узяв би ті самі пости вдруге. Тому перед записом ставиться позначка pending.json,
+# після state.json вона знімається; позначка, що лишилась, означає обірваний запис — його рядки прибираються.
+def begin_commit(data: Path, run_id: str, channel: str) -> None:
+    (data / PENDING_FILE).write_text(json.dumps({"run_id": run_id, "channel": channel}), encoding="utf-8")
+
+
+def finish_commit(data: Path) -> None:
+    (data / PENDING_FILE).unlink(missing_ok=True)
+
+
+def _drop_rows(path: Path, run_id: str, channel: str) -> int:
+    if not path.exists():
+        return 0
+    with open(path, encoding="utf-8-sig", newline="") as f:
+        reader = csv.DictReader(f)
+        fields = list(reader.fieldnames or [])
+        rows = list(reader)
+    keep = [r for r in rows if not (r.get("run_id") == run_id and r.get("channel") == channel)]
+    if len(keep) == len(rows):
+        return 0
+    shutil.copyfile(path, path.with_suffix(path.suffix + ".bak"))
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=fields)
+        w.writeheader()
+        w.writerows(keep)
+    return len(rows) - len(keep)
+
+
+def recover_pending(data: Path) -> dict | None:
+    """Прибирає наслідки обірваного запису каналу. Повертає {run_id, channel, posts, vacancies} або None.
+    state.json не чіпається: він пишеться останнім, тож після обриву лишився на попередньому пості."""
+    marker = data / PENDING_FILE
+    if not marker.exists():
+        return None
+    try:
+        info = json.loads(marker.read_text(encoding="utf-8"))
+        run_id, channel = info["run_id"], info["channel"]
+    except (ValueError, KeyError):
+        raise ValueError(f"{marker}: пошкоджена позначка обірваного запису — перевір файл вручну") from None
+    removed = {"run_id": run_id, "channel": channel,
+               "posts": _drop_rows(data / "posts.csv", run_id, channel),
+               "vacancies": _drop_rows(data / "vacancies.csv", run_id, channel)}
+    marker.unlink()
+    return removed
+
+
+def last_run(path: Path) -> dict | None:
+    if not path.exists():
+        return None
+    with open(path, encoding="utf-8-sig", newline="") as f:
+        rows = list(csv.DictReader(f))
+    return rows[-1] if rows else None

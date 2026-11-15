@@ -96,7 +96,7 @@ def load_raw(raw_dir: Path) -> dict[str, dict]:
 def load_baseline(data: Path) -> tuple[dict[str, bool], dict[str, list[dict]]]:
     """Поточна класифікація з posts.csv/vacancies.csv: {key: is_vacancy}, {key: [вакансії]}."""
     posts = {f"{r['channel']}/{r['post_id']}": r for r in read_csv(data / "posts.csv")}
-    classified = {k for k, r in posts.items() if r.get("classified", "True") == "True"}
+    classified = {k for k, r in posts.items() if (r.get("classified") or "True") == "True"}  # порожнє = рядок до міграції шапки
     vacs: dict[str, list[dict]] = {}
     for r in read_csv(data / "vacancies.csv"):
         vacs.setdefault(f"{r['channel']}/{r['post_id']}", []).append(

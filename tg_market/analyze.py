@@ -22,6 +22,7 @@ BASE = Path(__file__).parent
 DATA = BASE / "data"
 OUT = DATA / "out"
 DEDUP_WINDOW_DAYS = 30
+IMPUTE_COMPANY = True   # False — ніколи не підставляти компанію (усі згадки без компанії йдуть групою unknown)
 SMALL_N = 30
 
 _LEVEL_WORDS = r"\b(trainee|intern|internship|junior|middle|senior|lead|strong|стажер|стажування)\b"
@@ -51,16 +52,28 @@ def load(name: str) -> list[dict]:
 
 def dedup(rows: list[dict]) -> list[dict]:
     """Повертає унікальні вакансії з агрегованими полями."""
-    # 1) компанія: якщо порожня — найчастіша компанія цієї ж посади
-    by_title = defaultdict(Counter)
-    for r in rows:
-        if r["company"]:
-            by_title[norm_title(r["title"])][norm_company(r["company"])] += 1
+    # 1) компанія. Якщо в згадці її немає, вона підставляється ЛИШЕ коли це однозначно: у межах вікна
+    #    DEDUP_WINDOW_DAYS ту саму посаду публікувала рівно одна компанія (типовий репост без назви роботодавця).
+    #    Якщо таких компаній дві й більше («Data Analyst» у різних роботодавців) — компанія лишається порожньою,
+    #    і вакансія йде окремою групою company_source=unknown. Раніше бралась найчастіша компанія посади за весь
+    #    час: це зливало різних роботодавців в одну вакансію і занижувало число унікальних.
+    window = timedelta(days=DEDUP_WINDOW_DAYS)
+    named = defaultdict(list)
     for r in rows:
         r["_title"] = norm_title(r["title"])
-        c = norm_company(r["company"])
-        r["_company"] = c or (by_title[r["_title"]].most_common(1)[0][0] if by_title[r["_title"]] else "")
         r["_dt"] = datetime.fromisoformat(r["datetime"])
+        if r["company"]:
+            named[r["_title"]].append((r["_dt"], norm_company(r["company"])))
+    for r in rows:
+        c = norm_company(r["company"])
+        if c:
+            r["_company"], r["_company_source"] = c, "stated"
+            continue
+        near = {comp for dt, comp in named[r["_title"]] if abs(dt - r["_dt"]) <= window}
+        if IMPUTE_COMPANY and len(near) == 1:
+            r["_company"], r["_company_source"] = next(iter(near)), "imputed"
+        else:
+            r["_company"], r["_company_source"] = "", "unknown"
 
     # 2) кластери: ключ + розрив між сусідніми згадками ≤ вікна
     groups = defaultdict(list)
@@ -89,6 +102,9 @@ def _aggregate(cluster: list[dict]) -> dict:
     return {
         "title": first["title"],
         "company": first["_company"],
+        # stated — компанія названа хоча б в одній згадці; imputed — підставлена однозначно; unknown — невідома
+        "company_source": ("stated" if any(r["_company_source"] == "stated" for r in cluster)
+                           else cluster[0]["_company_source"]),
         "first_seen": first["datetime"][:10],
         "last_seen": cluster[-1]["datetime"][:10],
         "mentions": len(cluster),
@@ -187,7 +203,9 @@ def channel_metrics(posts: list[dict], mentions: list[dict], uniques: list[dict]
     out = []
     for ch, ps in sorted(by_ch.items()):
         views = [int(p["views"]) for p in ps if p["views"]]
-        done = [p for p in ps if p.get("classified", "True") == "True"]  # нерозібрані пости не рахуємо як «не вакансія»
+        # нерозібрані пости не рахуємо як «не вакансія»; порожнє значення — рядок, записаний до появи колонки
+        # classified (після автоматичної міграції шапки): тоді всі записані пости вважались розібраними
+        done = [p for p in ps if (p.get("classified") or "True") == "True"]
         weeks = max(1, len({iso_week(p["datetime"]) for p in ps}))
         uniq_it = sum(1 for u in uniques if u["is_it"] == "True" and ch in u["channels"].split("; "))
         out.append({
@@ -280,6 +298,9 @@ def main() -> None:
     write("control_group_junior.csv", summary)
     write("control_group_level.csv", lvl)
     print(f"згадок: {len(mentions)} → унікальних вакансій: {len(uniques)} (IT: {len(it)}); результати в {OUT}")
+    src = Counter(u["company_source"] for u in uniques)
+    print(f"компанія: названа — {src['stated']}, підставлена однозначно — {src['imputed']}, "
+          f"невідома (окрема група) — {src['unknown']}")
     for r in summary:
         print(f"контроль [{r['group']}]: n={r['n_it_unique']}, junior/intern {r['junior_share_of_all_pct']}% від усіх, "
               f"{r['junior_share_of_stated_pct']}% від вакансій з вказаним рівнем")

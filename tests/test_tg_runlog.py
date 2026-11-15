@@ -99,9 +99,9 @@ def test_collect_main_writes_runs_raw_and_posts(tmp_path, monkeypatch):
     monkeypatch.setattr(col, "get_session", lambda: object())
     posts = [Post("ch", 1, "2026-10-01T10:00:00+00:00", 7, "Junior Data Analyst, Acme"),
              Post("ch", 2, "2026-10-02T10:00:00+00:00", 9, "Реклама")]
-    monkeypatch.setattr(col, "fetch_channel", lambda *a, **k: posts)
+    monkeypatch.setattr(col, "fetch_channel", lambda *a, **k: (posts, None))
 
-    def fake_call_json(prompt, max_tokens, model=None):
+    def fake_call_json(prompt, max_tokens, model=None, **kw):
         tracker.record("claude-haiku-5-5", {"input_tokens": 1000, "output_tokens": 200}, "other")
         return {"posts": [
             {"key": "ch/1", "is_vacancy": True, "vacancies": [{"title": "Junior Data Analyst", "company": "Acme",
@@ -134,9 +134,9 @@ def test_collect_main_logs_failed_run_with_spent_tokens(tmp_path, monkeypatch):
     monkeypatch.setattr(col, "DATA", tmp_path)
     monkeypatch.setattr(col, "load_channels", lambda panel: [{"handle": "ch", "panel": "core", "max_pages": "1"}])
     monkeypatch.setattr(col, "get_session", lambda: object())
-    monkeypatch.setattr(col, "fetch_channel", lambda *a, **k: [Post("ch", 1, "2026-10-01T10:00:00+00:00", 1, "t")])
+    monkeypatch.setattr(col, "fetch_channel", lambda *a, **k: ([Post("ch", 1, "2026-10-01T10:00:00+00:00", 1, "t")], None))
 
-    def boom(prompt, max_tokens, model=None):
+    def boom(prompt, max_tokens, model=None, **kw):
         tracker.record("claude-haiku-5-5", {"input_tokens": 500, "output_tokens": 0}, "other")
         raise RuntimeError("мережа впала")
 
@@ -165,7 +165,7 @@ def test_backfill_raw_saves_text_only_for_known_posts_and_touches_nothing_else(t
     def fake_fetch(session, handle, since, min_id, max_pages):
         seen["min_id"] = min_id
         return [Post("ch", 1, "2026-09-01T00:00:00+00:00", 1, "Текст 1"), Post("ch", 2, "2026-09-02T00:00:00+00:00", 1, "Текст 2"),
-                Post("ch", 9, "2026-11-01T00:00:00+00:00", 1, "Новий, ще не оброблений")]
+                Post("ch", 9, "2026-11-01T00:00:00+00:00", 1, "Новий, ще не оброблений")], None
 
     monkeypatch.setattr(col, "fetch_channel", fake_fetch)
     monkeypatch.setattr(col, "call_json", lambda *a, **k: pytest.fail("Claude не має викликатись"))

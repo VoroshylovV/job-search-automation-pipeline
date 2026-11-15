@@ -1,12 +1,15 @@
 """Вивантаження даних збору Telegram у Google Drive (Google Sheets).
 
-    python -m tg_market.drive_export              # знімок за поточний місяць
-    python -m tg_market.drive_export --dry-run    # лише показати, що буде вивантажено
+    python -m tg_market.drive_export                  # дані за попередній календарний місяць
+    python -m tg_market.drive_export --month 2026-11  # явно вказаний місяць даних
+    python -m tg_market.drive_export --dry-run        # лише показати, що буде вивантажено
 
-Куди: файл «TG-ринок: дані збору YYYY-MM» у папці Drive, ID якої задано змінною
+Куди: файл «TG-ринок: дані за YYYY-MM (збір YYYY-MM)» у папці Drive, ID якої задано змінною
 TG_MARKET_DRIVE_FOLDER_ID у .env (папку створи сам; без змінної модуль нічого не робить).
+Перший місяць у назві — місяць ДАНИХ (збір іде на початку наступного місяця), другий — місяць, коли зроблено збір.
+До 15.11.2026 файл називався «TG-ринок: дані збору YYYY-MM» за місяцем запуску; ті файли лишаються як є.
 Що: аркуші runs, posts, vacancies (tg_market/data/) та всі out/*.csv (analyze, compare, monthly).
-Повторний запуск у тому самому місяці перезаписує вміст аркушів того ж файлу.
+Повторний запуск у тому самому місяці збору перезаписує вміст аркушів того ж файлу.
 Сирі тексти постів (data/raw/) і контакти не вивантажуються — їх немає в CSV.
 Після запису кожний аркуш читається назад, кількість рядків звіряється.
 """
@@ -37,8 +40,16 @@ def safe_cell(value) -> str:
     return s
 
 
-def snapshot_title(day: date) -> str:
-    return f"TG-ринок: дані збору {day:%Y-%m}"
+def previous_month(today: date) -> str:
+    y, m = (today.year, today.month - 1) if today.month > 1 else (today.year - 1, 12)
+    return f"{y}-{m:02d}"
+
+
+def snapshot_title(data_month: str, collected: date) -> str:
+    """data_month — місяць даних (YYYY-MM); collected — день збору."""
+    if not re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", data_month):
+        raise ValueError(f"місяць даних {data_month!r}: потрібен формат YYYY-MM")
+    return f"TG-ринок: дані за {data_month} (збір {collected:%Y-%m})"
 
 
 def collect_tables(data: Path | None = None, out: Path | None = None) -> list[tuple[str, list[list[str]]]]:
@@ -113,13 +124,15 @@ def upload(tables: list[tuple[str, list[list[str]]]], folder_id: str, title: str
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--dry-run", action="store_true", help="лише показати аркуші й кількість рядків")
+    ap.add_argument("--month", default=previous_month(date.today()),
+                    help="місяць даних YYYY-MM для назви файлу (за замовчуванням — попередній календарний місяць)")
     args = ap.parse_args(argv)
 
     tables = collect_tables()
     if not tables:
         print("Немає що вивантажувати: tg_market/data/*.csv порожні або відсутні.")
         return 1
-    title = snapshot_title(date.today())
+    title = snapshot_title(args.month, date.today())
     for name, rows in tables:
         print(f"  {name}: {len(rows) - 1} рядків")
     if args.dry_run:

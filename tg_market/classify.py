@@ -39,8 +39,12 @@ vacancies — список вакансій у пості (порожній, я�
 {payload}"""
 
 
-def build_prompt(posts) -> str:
-    payload = [{"key": f"{p.channel}/{p.post_id}", "text": p.text[:1500]} for p in posts]
+SHORT_POST_CHARS = 1500    # довші пости (дайджести) йдуть окремим запитом повним текстом
+LONG_POST_MAX_CHARS = 8000  # запобіжник: пост Telegram — до 4096 знаків, плюс рядок «Посилання»
+
+
+def build_prompt(posts, limit: int = SHORT_POST_CHARS) -> str:
+    payload = [{"key": f"{p.channel}/{p.post_id}", "text": p.text[:limit]} for p in posts]
     return PROMPT.format(
         directions=", ".join(DIRECTIONS), levels=", ".join(LEVELS), formats=", ".join(FORMATS),
         payload=json.dumps(payload, ensure_ascii=False),

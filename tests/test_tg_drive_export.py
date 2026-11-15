@@ -13,8 +13,12 @@ def test_safe_cell_blocks_formulas_but_keeps_numbers():
     assert de.safe_cell(None) == ""
 
 
-def test_snapshot_title_uses_month():
-    assert de.snapshot_title(date(2026, 11, 8)) == "TG-ринок: дані збору 2026-11"
+def test_snapshot_title_names_data_month_and_collection_month():
+    assert de.snapshot_title("2026-11", date(2026, 12, 5)) == "TG-ринок: дані за 2026-11 (збір 2026-12)"
+    assert de.previous_month(date(2026, 12, 5)) == "2026-11" and de.previous_month(date(2027, 1, 5)) == "2026-12"
+    import pytest
+    with pytest.raises(ValueError):
+        de.snapshot_title("листопад", date(2026, 12, 5))
 
 
 def test_collect_tables_reads_raw_and_out_and_sanitizes(tmp_path):
