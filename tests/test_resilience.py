@@ -144,7 +144,7 @@ def test_all_batches_failing_does_not_raise():
 # ---- 3. самоперевірка ------------------------------------------------------
 
 def _ok_sources():
-    names = ["djinni.co", "jobs.dou.ua", "robota.ua", "work.ua", "happymonday.ua"]
+    names = ["djinni.co", "jobs.dou.ua", "robota.ua", "work.ua"]
     return {s: SourceStatus(source=s, status="OK") for s in names}
 
 
@@ -169,7 +169,7 @@ def test_selfcheck_trend_not_comparable_with_eval_failures(monkeypatch):
     r = s4.run_step4({"source_statuses": _ok_sources(), "dedup_level_used": 1, "vacancies": [],
                       "total_found_before_filters": 10, "unevaluated_count": 3, "collection_methods": {}},
                      {}, {"saved": True}, "2026-10-10 12:00 UTC")["result"]
-    assert r.sources_ok_count == 5
+    assert r.sources_ok_count == 4
     assert not r.trend_comparable and "оцінку не виконано" in r.trend_comparable_reason
     assert r.only_low_or_zero_at_full_coverage == "н/д"
 

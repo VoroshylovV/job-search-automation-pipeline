@@ -41,14 +41,9 @@ _MAIN_SELECTORS = {
     "jobs.dou.ua": ["div.l-vacancy", "div.b-vacancy"],
     "work.ua": ["div#job-description", "div.card.wordwrap"],
     "djinni.co": ["main", "div.job-post-page"],
-    # happymonday.ua: перевірка 02.10.2026 показала, що "main"/"article"
-    # повертають усю сторінку з шапкою сайту («Work with Ukraine…», «Останнє
-    # оновлення…»), а опис вакансії обрізався лімітом 6000 символів. Тому
-    # для нього — лише евристика від заголовка вакансії (_from_title_block).
-    "happymonday.ua": [],
 }
 # Джерела, де текст ріжеться від заголовка вакансії (h1), а не від початку.
-_TITLE_ANCHORED_SOURCES = {"happymonday.ua"}
+_TITLE_ANCHORED_SOURCES: set = set()  # порожньо: джерел із прив'язкою до h1 немає
 _MIN_BLOCK_CHARS = 800
 _NOISE_TAGS = ["script", "style", "noscript", "nav", "header", "footer", "form", "svg", "iframe"]
 

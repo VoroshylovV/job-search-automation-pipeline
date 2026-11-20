@@ -18,6 +18,7 @@ from __future__ import annotations
 import logging
 
 from claude_orchestrator.cost import STAGES, STAGE_TITLES, tracker as cost_tracker
+from config import N_SOURCES
 from config import (
     MAX_RUN_COST_USD,
     LOW_MATCH_STREAK_HEURISTIC_RUNS,
@@ -262,16 +263,16 @@ def run_step4(
         + step1_result.get("budget_unevaluated_count", 0)
         + step1_result.get("stage2_capped_count", 0)
     )
-    trend_comparable = sources_ok_count == 5 and not unevaluated
-    if sources_ok_count != 5:
-        trend_reason = f"джерел перевірено {sources_ok_count}/5, а не 5/5"
+    trend_comparable = sources_ok_count == N_SOURCES and not unevaluated
+    if sources_ok_count != N_SOURCES:
+        trend_reason = f"джерел перевірено {sources_ok_count}/{N_SOURCES}, а не {N_SOURCES}/{N_SOURCES}"
     elif unevaluated:
         trend_reason = f"оцінку не виконано для {unevaluated} вакансій"
     else:
         trend_reason = ""
 
     vacancies = step1_result.get("vacancies", [])
-    full_coverage = sources_ok_count == 5 and not unevaluated
+    full_coverage = sources_ok_count == N_SOURCES and not unevaluated
     if not full_coverage:
         only_low_or_zero = "н/д"
     elif not vacancies:
@@ -327,7 +328,7 @@ def run_step4(
 
 
 def format_selfcheck_block(result: SelfCheckResult) -> str:
-    """Крок 4 — компактний список «Крок N: OK/ЧАСТКОВО — …», джерела X/5,
+    """Крок 4 — компактний список «Крок N: OK/ЧАСТКОВО — …», джерела X/4,
     спосіб збору, конверсія, порівнюваність (Правило Ц п.4). Службове
     (час перевірки, вартість, тінь Sonnet/Haiku, евристичний сигнал) — у
     selfcheck_notes() -> «Примітки»."""
@@ -339,7 +340,7 @@ def format_selfcheck_block(result: SelfCheckResult) -> str:
         f"Крок 3 (метрика): {result.step3_metrics_status}"
         + (f" — {result.step3_metrics_note}" if result.step3_metrics_note else " — без зауважень"),
         f"Крок 3 (таблиця відгуків): {result.step3_tracker_status} — {result.step3_tracker_note}",
-        f"Джерела: {result.sources_ok_count}/5 штатно",
+        f"Джерела: {result.sources_ok_count}/{N_SOURCES} штатно",
         f"Спосіб збору «знайдено»: {result.collection_method}",
         f"Конверсія показано/знайдено: {result.conversion_pct}"
         + ("%" if result.conversion_pct != "н/д" else ""),
@@ -361,7 +362,7 @@ def selfcheck_notes(result) -> list[str]:
     if getattr(result, "low_match_streak_signal", False):
         notes.append(
             f"⚠️ Сигнал (евристика): {LOW_MATCH_STREAK_HEURISTIC_RUNS}+ запуски поспіль лише "
-            "Low/нуль при повному 5/5 покритті — варто переглянути фільтр досвіду/ЗП вручну "
+            "Low/нуль при повному 4/4 покритті — варто переглянути фільтр досвіду/ЗП вручну "
             "(не обов'язково ознака ринку)."
         )
     return notes

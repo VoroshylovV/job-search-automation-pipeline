@@ -153,9 +153,8 @@ def test_selfcheck_still_start_marker_repaired_in_place(world, monkeypatch):
 def test_sources_not_read_no_repair_and_alarm(world):
     ctx = _ctx()
     ctx.step1_result["source_statuses"]["work.ua"] = SourceStatus("work.ua", "недоступне", "HTTP 403")
-    del ctx.step1_result["source_statuses"]["happymonday.ua"]
     res = vw.verify_writes(ctx)
-    assert not res.ok and "work.ua, happymonday.ua" in res.failed[0]
+    assert not res.ok and "work.ua" in res.failed[0]
     assert alarm.format_block().startswith("🚨🚨🚨 !!! НЕ ЗАПИСАНО: ДЖЕРЕЛА НЕ ПРОЧИТАНО")
 
 

@@ -14,7 +14,7 @@ class RawJobPosting:
     весь сайт).
     """
 
-    source: str  # "djinni.co" | "jobs.dou.ua" | "robota.ua" | "work.ua" | "happymonday.ua"
+    source: str  # "djinni.co" | "jobs.dou.ua" | "robota.ua" | "work.ua"
     title: str
     company: str
     url: Optional[str]
@@ -113,7 +113,7 @@ class SourceStatus:
 class RawFreelanceProject:
     """Сирий фріланс-проєкт/пост, ДО оцінки релевантності Claude.
 
-    На відміну від RawJobPosting (5 джерел, спільна структура), тут поля
+    На відміну від RawJobPosting (4 джерела, спільна структура), тут поля
     трохи асиметричні між джерелами: bids_count і budget_raw мають сенс
     лише для Freelancehunt (2 категорії), для Telegram-каналу вони завжди
     порожні/None — див. коментар у config.py про обмеження джерела 3."""
@@ -246,7 +246,7 @@ class RunMetrics:
             s.get("jobs.dou.ua", "OK"),
             s.get("robota.ua", "OK"),
             s.get("work.ua", "OK"),
-            s.get("happymonday.ua", "OK"),
+            "—",  # резервна колонка: джерело вимкнено, структуру таблиці не ламаємо
             self.notes or "без зауважень",
             round(self.cost_total_usd, 4),
             "н/д" if self.cost_per_shown_usd is None else round(self.cost_per_shown_usd, 4),
@@ -307,12 +307,12 @@ class SelfCheckResult:
     step3_metrics_note: str
     step3_tracker_status: str
     step3_tracker_note: str
-    sources_ok_count: int  # X/5
+    sources_ok_count: int  # X/4
     collection_method: str  # "усі_сторінки" | "перша_сторінка" | "оцінка" | "не_встановлено"
     conversion_pct: str  # "NN" або "н/д" (якщо знайдено=0)
     trend_comparable: bool
     trend_comparable_reason: str
-    # "так"/"ні"/"н/д" — чи цей запуск при повному 5/5 покритті показав лише
+    # "так"/"ні"/"н/д" — чи цей запуск при повному 4/4 покритті показав лише
     # Low-match вакансії (або нуль). Зберігається в окремій колонці саме
     # для того, щоб 4.3-евристику (3+ поспіль) можна було рахувати з
     # ІСТОРІЇ файлу, а не лише для поточного запуску — колонок метрики
@@ -337,7 +337,7 @@ class SelfCheckResult:
             + (f" — {self.step3_metrics_note}" if self.step3_metrics_note else ""),
             f"{self.step3_tracker_status}"
             + (f" — {self.step3_tracker_note}" if self.step3_tracker_note else ""),
-            f"{self.sources_ok_count}/5",
+            f"{self.sources_ok_count}/4",
             self.collection_method,
             self.conversion_pct,
             ("так" if self.trend_comparable else "ні")
@@ -385,7 +385,7 @@ class ComparisonRow:
     f_shown_auto: Optional[int]  # Крок 1.2, сума BI+SQL+Telegram
     f_shown_manual: int
     f_url_overlap: Optional[int]
-    step4_sources_auto: str  # "X/5" або "н/д"
+    step4_sources_auto: str  # "X/4" або "н/д"
     step4_sources_manual: str
     step4_status_auto: str  # "OK"|"ЧАСТКОВО"|"НЕ ВИКОНАНО"|"н/д"
     step4_status_manual: str

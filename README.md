@@ -79,7 +79,7 @@ flowchart TB
 
     subgraph S1["Крок 1. Вакансії"]
         direction LR
-        SC["Scrapers<br/>Djinni, DOU, Robota, Work.ua, HappyMonday"] --> DD["Дедуплікація за ID (21 день)<br/>дата з картки, стоп за назвою"] --> C1["Claude, етап 1: картка<br/>компактний JSON"] --> C1B["Claude, етап 2: повний текст<br/>ліміт 20, дедуп за компанією, репост"]
+        SC["Scrapers<br/>Djinni, DOU, Robota, Work.ua"] --> DD["Дедуплікація за ID (21 день)<br/>дата з картки, стоп за назвою"] --> C1["Claude, етап 1: картка<br/>компактний JSON"] --> C1B["Claude, етап 2: повний текст<br/>ліміт 20, дедуп за компанією, репост"]
     end
 
     subgraph S12["Крок 1.2. Фріланс"]
@@ -136,7 +136,7 @@ models.py                 — dataclasses: RawJobPosting, ScoredVacancy, RawFree
                              ScoredFreelanceProject, EmailFinding, RunMetrics, FreelanceRunMetrics,
                              SelfCheckResult, ComparisonRow (Крок 5)
 scrapers/                 — по одному модулю на джерело:
-                               вакансії — djinni, dou, robota, workua, happymonday
+                               вакансії — djinni, dou, robota, workua
                                фріланс (Крок 1.2) — freelancehunt, telegram_channel
 google_services/          — auth.py, drive.py, docs.py, sheets.py, gmail.py, notify.py (push)
 claude_orchestrator/      — prompts.py (тексти), client.py (виклик Anthropic API)

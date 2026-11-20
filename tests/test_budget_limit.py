@@ -113,7 +113,7 @@ def test_selfcheck_reports_budget_skips_and_cost(monkeypatch):
     monkeypatch.setattr(s4.sheets, "ensure_header", lambda *a, **k: None)
     monkeypatch.setattr(s4.sheets, "append_row", lambda *a, **k: None)
     monkeypatch.setattr(s4.sheets, "read_last_data_rows", lambda *a, **k: [])
-    sources = {n: SourceStatus(n) for n in ["djinni.co", "jobs.dou.ua", "robota.ua", "work.ua", "happymonday.ua"]}
+    sources = {n: SourceStatus(n) for n in ["djinni.co", "jobs.dou.ua", "robota.ua", "work.ua"]}
     r = s4.run_step4({"source_statuses": sources, "dedup_level_used": 1, "vacancies": [],
                       "total_found_before_filters": 10, "budget_unevaluated_count": 4, "collection_methods": {}},
                      {}, {"saved": True}, "2026-10-10 12:00 UTC")["result"]

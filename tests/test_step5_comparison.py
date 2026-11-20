@@ -140,7 +140,7 @@ def test_computes_overlap_and_diff_correctly():
     assert row.f_url_overlap is None
 
     assert row.step4_sources_auto == "5/5"
-    assert row.step4_sources_manual == "4/5"
+    assert row.step4_sources_manual == "4/4"
     assert row.step4_status_auto == "OK"
     assert row.step4_status_manual == "ЧАСТКОВО"
 

@@ -27,13 +27,13 @@ def _vac(i=0, category=CATEGORY_NONE, **kw):
 def _selfcheck():
     return NS(timestamp_utc="2026-11-02 10:00 UTC", step1_status="OK", step1_note="", step2_status="OK", step2_note="",
               step3_metrics_status="OK", step3_metrics_note="", step3_tracker_status="OK", step3_tracker_note="без нових відмов",
-              sources_ok_count=5, collection_method="перша_сторінка", conversion_pct="3", trend_comparable=True,
+              sources_ok_count=4, collection_method="перша_сторінка", conversion_pct="3", trend_comparable=True,
               trend_comparable_reason="", step1_2_status="OK", step1_2_note="", shadow_summary="тінь вимкнено",
               notes="Вартість Claude: $0.250", low_match_streak_signal=True)
 
 
 def _report(vacancies=(), projects=(), findings=(), **kw):
-    statuses = {n: SourceStatus(n, "OK") for n in ["djinni.co", "jobs.dou.ua", "robota.ua", "work.ua", "happymonday.ua"]}
+    statuses = {n: SourceStatus(n, "OK") for n in ["djinni.co", "jobs.dou.ua", "robota.ua", "work.ua"]}
     step1 = {"vacancies": list(vacancies), "near_misses": [], "source_statuses": statuses,
              "dedup_log_note": "службова нотатка дедуплікації", "unknown_date_note": ""}
     step1_2 = {"projects": list(projects), "source_statuses": {}, "dedup_log_note": ""}
@@ -82,7 +82,7 @@ def test_empty_category_block_and_sources_line_names_all_five():
     text = _report([])
     assert f"{CATEGORY_BLOCK_TITLE}: немає" in text
     line = next(l for l in text.splitlines() if l.startswith("Статуси джерел:"))
-    for name in ["djinni.co", "jobs.dou.ua", "robota.ua", "work.ua", "happymonday.ua"]:
+    for name in ["djinni.co", "jobs.dou.ua", "robota.ua", "work.ua"]:
         assert name in line
 
 
@@ -115,7 +115,7 @@ def test_step_3_block_is_present_and_metric_status_goes_to_notes():
 def test_step_4_compact_list_and_service_lines_only_in_notes():
     text = _report()
     step4 = text.split("**Крок 4 — самоперевірка**")[1].split("**Примітки**")[0]
-    assert re.search(r"^- Крок 1: OK", step4, flags=re.M) and "Джерела: 5/5" in step4 and "Конверсія" in step4
+    assert re.search(r"^- Крок 1: OK", step4, flags=re.M) and "Джерела: 4/4" in step4 and "Конверсія" in step4
     assert "Вартість" not in step4 and "тінь" not in step4 and "Сигнал" not in step4 and "Перевірка запуску" not in step4
     notes = text.split("**Примітки**")[1]
     for needle in ["службова нотатка дедуплікації", "нотатка пошти", "Вартість Claude: $0.250", "Сигнал (евристика)", "тінь вимкнено"]:

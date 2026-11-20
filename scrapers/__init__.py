@@ -3,14 +3,13 @@
 ScraperError (base.py), якщо джерело недоступне — pipeline/step1_vacancies.py
 і pipeline/step1_2_freelance.py ловлять це й позначають джерело
 "недоступне", не зупиняючи весь запуск."""
-from . import djinni, dou, freelancehunt, happymonday, robota, telegram_channel, workua  # noqa: F401
+from . import djinni, dou, freelancehunt, robota, telegram_channel, workua  # noqa: F401
 
 SCRAPER_MODULES = {
     "djinni.co": djinni,
     "jobs.dou.ua": dou,
     "robota.ua": robota,
     "work.ua": workua,
-    "happymonday.ua": happymonday,
 }
 
 # Крок 1.2 — окремий реєстр, бо freelancehunt.py сам ітерує 2 категорії

@@ -98,6 +98,6 @@ def test_limit_value_is_20():
 
 def test_selfcheck_reports_stage2_cap():
     from pipeline.step4_selfcheck import _step1_status
-    sources = {n: SourceStatus(n) for n in ["djinni.co", "jobs.dou.ua", "robota.ua", "work.ua", "happymonday.ua"]}
+    sources = {n: SourceStatus(n) for n in ["djinni.co", "jobs.dou.ua", "robota.ua", "work.ua"]}
     status, note = _step1_status({"source_statuses": sources, "dedup_level_used": 1, "stage2_capped_count": 3})
     assert status == "ЧАСТКОВО" and "3 вакансій не оцінено (ліміт етапу 2)" in note

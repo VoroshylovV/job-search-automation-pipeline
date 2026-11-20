@@ -26,6 +26,7 @@ from __future__ import annotations
 import logging
 from datetime import date, datetime, timezone
 
+from config import N_SOURCES
 from config import (
     COMPARISON_SHEET_TITLE,
     DEDUP_LOG_TITLE_CANONICAL,
@@ -176,7 +177,7 @@ def run_step5(
         step4_sources_auto, step4_status_auto = "н/д", "н/д"
 
     manual_selfcheck = step4_result.get("result") if step4_result else None
-    step4_sources_manual = f"{manual_selfcheck.sources_ok_count}/5" if manual_selfcheck else "н/д"
+    step4_sources_manual = f"{manual_selfcheck.sources_ok_count}/{N_SOURCES}" if manual_selfcheck else "н/д"
     step4_status_manual = manual_selfcheck.step1_status if manual_selfcheck else "н/д"
 
     notes_parts = []

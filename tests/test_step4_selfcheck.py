@@ -6,7 +6,7 @@ from __future__ import annotations
 from models import SourceStatus
 from pipeline.step4_selfcheck import _step1_2_status, _step1_status
 
-ALL_VACANCY_SOURCES = ["djinni.co", "jobs.dou.ua", "robota.ua", "work.ua", "happymonday.ua"]
+ALL_VACANCY_SOURCES = ["djinni.co", "jobs.dou.ua", "robota.ua", "work.ua"]
 
 
 def test_step1_status_ok_when_all_sources_ok_and_dedup_level1():
@@ -31,7 +31,7 @@ def test_step1_status_chastkovo_when_one_source_down():
 
     status, note = _step1_status(result)
     assert status == "ЧАСТКОВО"
-    assert "4/5" in note
+    assert "3/4" in note
 
 
 def test_step1_status_chastkovo_when_dedup_level2():
