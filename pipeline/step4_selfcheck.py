@@ -175,7 +175,7 @@ def _low_match_streak(
     sheet_id: str, current_signal: str
 ) -> bool:
     """4.3 евристика: 3+ запуски поспіль (включно з поточним) з "так" у
-    колонці "Лише Low/нуль при 5/5". Порядок непорівнюваних/невідомих
+    колонці "Лише Low/нуль при повному покритті". Порядок непорівнюваних/невідомих
     ("н/д", порожньо) розриває серію — консервативно, щоб не спрацьовувати
     хибно на неповній історії."""
     if current_signal != "так":
@@ -186,7 +186,7 @@ def _low_match_streak(
         logger.warning("Не вдалось прочитати історію Кроку 4 для евристики: %s", exc)
         return False
 
-    idx = SELFCHECK_HEADER.index("Лише Low/нуль при 5/5")
+    idx = SELFCHECK_HEADER.index("Лише Low/нуль при повному покритті")
     streak = 1  # поточний запуск уже "так"
     for row in reversed(rows):  # від найновішого історичного рядка назад
         if row and row[0].strip().endswith(SELFCHECK_RUN_STARTED_MARK):

@@ -218,7 +218,7 @@ def test_start_marker_failure_raises_alarm(monkeypatch):
 def test_streak_ignores_start_marker_rows(monkeypatch):
     from pipeline import step4_selfcheck as s4
     from models import SELFCHECK_HEADER
-    idx = SELFCHECK_HEADER.index("Лише Low/нуль при 5/5")
+    idx = SELFCHECK_HEADER.index("Лише Low/нуль при повному покритті")
     yes = [""] * len(SELFCHECK_HEADER)
     yes[idx] = "так"
     rows = [yes, yes, ["2026-10-26 11:00 UTC — ЗАПУСК ПОЧАТО"]]  # останній — мітка поточного запуску
