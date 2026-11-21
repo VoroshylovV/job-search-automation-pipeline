@@ -39,7 +39,7 @@ LISTING_URLS = [
 
 # Публічне API пошуку вакансій, з якого бере дані сам сайт.
 ROBOTA_API_URL = "https://api.robota.ua/vacancy/search"
-API_KEYWORDS = ["data analyst", "product analyst", "ai analyst", "crm analyst"]  # AI/CRM — Правило И п.3
+API_KEYWORDS = ["data analyst", "product analyst", "ai analyst", "crm analyst", "junior bi analyst", "data analyst junior"]  # AI/CRM — Правило И п.3
 # scheduleId=3 — "Віддалена робота" (додано 02.10.2026; перевірено: для
 # "data analyst" звужує видачу API зі 127 до 35). robota.ua позначає так і
 # гібрид "з можливістю віддаленої", тому остаточне рішення про формат
