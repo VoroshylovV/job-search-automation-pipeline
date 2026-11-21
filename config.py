@@ -31,7 +31,9 @@ ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 CLAUDE_MODEL = os.environ.get("CLAUDE_MODEL", "claude-sonnet-4-5")
 CLAUDE_MODEL_CARDS = os.environ.get("CLAUDE_MODEL_CARDS", "claude-sonnet-5-5")
 CLAUDE_MODEL_CARDS_SHADOW = os.environ.get("CLAUDE_MODEL_CARDS_SHADOW", "claude-haiku-5-5")
-CLAUDE_MODEL_FULLTEXT = os.environ.get("CLAUDE_MODEL_FULLTEXT", CLAUDE_MODEL)
+# 21.11.2026: етап 2 на Sonnet 5.5 — та сама модель, що в онлайн-промпті (різна модель давала
+# різні вердикти і спотворювала порівняння промт/репо). Крок 1.2, пошта, tg_market — CLAUDE_MODEL.
+CLAUDE_MODEL_FULLTEXT = os.environ.get("CLAUDE_MODEL_FULLTEXT", "claude-sonnet-5-5")
 # Етап 2 (повний текст, дорогий): не більше стільки вакансій, лише High/Medium з етапу 1.
 MAX_FULLTEXT_VACANCIES = 20
 # Ліміт вартості Claude за запуск (USD). Крок 1 перестає викликати API, коли
@@ -308,8 +310,8 @@ SOURCES = ("djinni.co", "jobs.dou.ua", "robota.ua", "work.ua")
 N_SOURCES = len(SOURCES)
 
 # Пагінація (Правило И п.8, 18.10.2026): гортати сторінки, доки не з'являться
-# вакансії старші за вікно свіжості або не скінчиться видача. djinni — лише
-# перша сторінка кожного запиту (page=2+ скидає фільтри, 18.10.2026);
+# вакансії старші за вікно свіжості або не скінчиться видача. djinni — теж
+# гортається (scrapers/djinni._paginate_by_updated за датою «updated»; перевірено 21.11.2026: page=2 фільтри зберігає);
 # DJINNI_MIN_PAGES лишено для сумісності, скрапер djinni його не використовує. MAX_LISTING_PAGES — запобіжник: якщо
 # зупинились на ньому, джерело отримує статус «неповне покриття».
 MAX_LISTING_PAGES = 5

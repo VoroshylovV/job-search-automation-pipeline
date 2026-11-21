@@ -26,7 +26,7 @@ def _fresh_tracker():
 
 def test_config_default_models_from_26_10(monkeypatch):
     # З прогону 26.10.2026: етап 1 — Sonnet 5.5 (основна) + Haiku 5.5 (тінь);
-    # етап 2 і всі інші виклики моделі — Sonnet 4.5.
+    # етап 2 — Sonnet 5.5 (з 21.11.2026), інші виклики моделі — Sonnet 4.5.
     import importlib
     import config
     for var in ("CLAUDE_MODEL", "CLAUDE_MODEL_CARDS", "CLAUDE_MODEL_CARDS_SHADOW", "CLAUDE_MODEL_FULLTEXT"):
@@ -37,7 +37,7 @@ def test_config_default_models_from_26_10(monkeypatch):
         assert config.CLAUDE_MODEL == "claude-sonnet-4-5"
         assert config.CLAUDE_MODEL_CARDS == "claude-sonnet-5-5"
         assert config.CLAUDE_MODEL_CARDS_SHADOW == "claude-haiku-5-5"
-        assert config.CLAUDE_MODEL_FULLTEXT == "claude-sonnet-4-5"
+        assert config.CLAUDE_MODEL_FULLTEXT == "claude-sonnet-5-5"
     finally:
         monkeypatch.undo()
         importlib.reload(config)
