@@ -80,6 +80,10 @@ def fetch(
             if resp.status_code == 200:
                 return resp
             last_exc = ScraperError(f"{url} -> HTTP {resp.status_code}")
+            # 403 = сайт відмовив: ту саму сторінку повторно не читаємо
+            # (правило пробного тижня 26.11.2026).
+            if resp.status_code == 403:
+                break
         except Exception as exc:  # noqa: BLE001,PERF203 - requests і curl_cffi мають різні ієрархії помилок
             last_exc = exc
         if attempt < retries:
